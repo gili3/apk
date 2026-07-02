@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      ELEVEN STORE — Theme (LIGHT)
+      يُستخدم لشريط الحالة/شريط التنقّل والخلفية قبل رسم Compose.
+      الألوان الفعلية لواجهة التطبيق تُدار عبر ElevenStoreTheme في Theme.kt
+    -->
+    <style name="Theme.ElevenStore" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:textColorPrimary">@color/foreground</item>
+        <item name="android:colorAccent">@color/primary</item>
+    </style>
+</resources>

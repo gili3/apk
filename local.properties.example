@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────
+# انسخ هذا الملف إلى local.properties (المستثنى من Git عبر .gitignore) واملأ
+# القيم الحقيقية محلياً فقط. لا تضع القيم الحقيقية هنا ولا في أي ملف يُرفع
+# للمستودع. للبناء عبر CI/CD استخدم متغيرات البيئة بنفس الأسماء بدلاً من هذا
+# الملف (راجع apk/app/build.gradle — دالة secret()).
+# ─────────────────────────────────────────────────────────────────────────
+
+# مسار ملف الـkeystore الفعلي على جهازك (لا يُرفع أبداً — راجع .gitignore)
+RELEASE_STORE_FILE=/absolute/path/to/your/release-keystore.jks
+
+RELEASE_STORE_PASSWORD=
+RELEASE_KEY_ALIAS=
+RELEASE_KEY_PASSWORD=
+
+# مسار مفتاح Android SDK المحلي (يُولَّد تلقائياً عادة من Android Studio)
+sdk.dir=/absolute/path/to/Android/sdk

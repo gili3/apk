@@ -47,12 +47,21 @@ object AlgoliaSearchService {
 
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
+    // نفس نافذة "جديد" (30 يوماً) المستخدمة في server/firestore-router.ts
+    // وFirestoreRepository.getProducts وclient/src/lib/algolia.ts — يجب أن
+    // تبقى القيمة متطابقة في المصادر الأربعة.
+    private const val NEW_PRODUCT_WINDOW_MS = 30L * 24 * 60 * 60 * 1000
+
     suspend fun searchProducts(
         query: String,
         categoryId: String? = null,
         brandId: String? = null,
         onSale: Boolean? = null,
         isFeatured: Boolean? = null,
+        // ✅ إصلاح: كانا مفقودين هنا تماماً كما بالموقع (نفس الثغرة) — البحث
+        // النصي مع فلتر "جديد" أو "الأكثر مبيعاً" كان يتجاهلهما بصمت.
+        isBestSeller: Boolean? = null,
+        isNew: Boolean? = null,
         hitsPerPage: Int = 60,
     ): List<Product> = withContext(Dispatchers.IO) {
         if (!isConfigured) return@withContext emptyList()
@@ -66,6 +75,11 @@ object AlgoliaSearchService {
             brandId?.let { filters += "brandId:$it" }
             if (onSale == true) filters += "isOnSale:true"
             if (isFeatured == true) filters += "isFeatured:true"
+            if (isBestSeller == true) filters += "isBestSeller:true"
+            if (isNew == true) {
+                val threshold = System.currentTimeMillis() - NEW_PRODUCT_WINDOW_MS
+                filters += "createdAtTimestamp > $threshold"
+            }
 
             val requestBody = JSONObject().apply {
                 put("query", query)

@@ -158,6 +158,30 @@ class MainViewModel : ViewModel() {
         .map { it.toSet() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
+    // ✅ جديد: بيانات منتجات المفضلة الكاملة (اسم/سعر/صورة/مخزون) مجلوبة
+    // مباشرة من مستند كل منتج — تماماً مثل getFavorites بالموقع، بدل
+    // الاعتماد على allProducts (انظر شرح الإصلاح في FirestoreRepository
+    // .getFavoriteProducts). تُحدَّث كلما تغيّرت مجموعة المفضّلة.
+    private val _favoriteProducts = MutableStateFlow<List<Product>>(emptyList())
+    val favoriteProducts: StateFlow<List<Product>> = _favoriteProducts
+
+    private val _favoritesLoading = MutableStateFlow(false)
+    val favoritesLoading: StateFlow<Boolean> = _favoritesLoading
+
+    init {
+        viewModelScope.launch {
+            favoriteIds.collect { loadFavoriteProducts() }
+        }
+    }
+
+    fun loadFavoriteProducts() {
+        viewModelScope.launch {
+            _favoritesLoading.value = true
+            try { _favoriteProducts.value = repo.getFavoriteProducts() }
+            finally { _favoritesLoading.value = false }
+        }
+    }
+
     // ─── Orders ─────────────────────────────────────────────────
     private val _orders = MutableStateFlow<List<Order>>(emptyList())
     val orders: StateFlow<List<Order>> = _orders

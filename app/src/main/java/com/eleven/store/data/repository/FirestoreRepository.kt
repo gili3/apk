@@ -358,6 +358,13 @@ class FirestoreRepository {
                 brandId = brandId,
                 onSale = onSale,
                 isFeatured = isFeatured,
+                // ✅ إصلاح: كانا يُسقَطان بصمت قبل هذا التعديل — البحث بالنص
+                // مع فلتر "جديد"/"الأكثر مبيعاً" كان يرجع نتائج من كل المنتجات
+                // بدل الاقتصار على الفلتر المطلوب (خلافاً لمسار Firestore
+                // الاحتياطي أدناه الذي كان يطبّقهما بشكل صحيح، فيتضارب سلوك
+                // نفس الشاشة حسب توفر Algolia من عدمه).
+                isBestSeller = isBestSeller,
+                isNew = isNew,
             )
             if (hits.isNotEmpty()) return hits
             // نتيجة فارغة من Algolia (لا فرق بين "لا نتائج فعلاً" و"فشل شبكة"
@@ -539,6 +546,55 @@ class FirestoreRepository {
                 trySend(snap?.documents?.map { it.id } ?: emptyList())
             }
         awaitClose { listener.remove() }
+    }
+
+    // ✅ إصلاح: كانت FavoritesScreen تشتق قائمة منتجات المفضلة عبر تصفية
+    // viewModel.allProducts (حالة مشتركة تُملؤها شاشة المنتجات بآخر فلتر/بحث
+    // استخدمه المستخدم هناك، ومحدودة بـ100 نتيجة، وتستبعد المنتجات نافدة
+    // المخزون). النتيجة: شاشة المفضلة تظهر فارغة أو ناقصة إن لم تتم زيارة
+    // شاشة المنتجات أصلاً، أو إن كان آخر فلتر مستخدم هناك لا يشمل كل
+    // المنتجات المفضَّلة (فئة معيّنة، بحث نصي، فلتر "عروض"...)، أو إن كان
+    // أحد عناصر المفضلة نافد المخزون. الموقع (getFavorites بـfirestore-
+    // router.ts) يجلب بيانات كل منتج مفضَّل مباشرة من مستنده الخاص بدل
+    // الاعتماد على أي قائمة/فلتر آخر — هذه الدالة تطابق نفس المنطق تماماً
+    // (تُبقي عناصر المخزون=0 ظاهرة كالموقع، وتحذف تلقائياً أي مفضّلة لمنتج
+    // لم يعد موجوداً أو أصبح غير نشط).
+    suspend fun getFavoriteProducts(): List<Product> {
+        val u = uid ?: return emptyList()
+        val favRef = db.collection("users").document(u).collection("favorites")
+        return try {
+            val favDocs = favRef.get().await().documents
+            if (favDocs.isEmpty()) return emptyList()
+
+            val productIds = favDocs.map { it.getString("productId") ?: it.id }
+            val productSnaps = productIds.map { id ->
+                db.collection("products").document(id).get().await()
+            }
+
+            val batch = db.batch()
+            var needsCommit = false
+            val result = mutableListOf<Product>()
+
+            favDocs.forEachIndexed { idx, favDoc ->
+                val snap = productSnaps[idx]
+                val product = if (snap.exists()) snap.toObject(Product::class.java)?.copy(id = snap.id) else null
+                if (product == null || !product.isActive) {
+                    // المنتج لم يعد موجوداً أو أصبح غير نشط: نحذفه تلقائياً من المفضلة
+                    // (مطابق تماماً لنفس التنظيف التلقائي في getFavorites بالموقع)
+                    batch.delete(favRef.document(favDoc.id))
+                    needsCommit = true
+                } else {
+                    result.add(product)
+                }
+            }
+            if (needsCommit) {
+                try { batch.commit().await() } catch (_: Exception) { /* تنظيف ثانوي، تجاهل الفشل */ }
+            }
+            result
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getFavoriteProducts failed: ${e.message}", e)
+            emptyList()
+        }
     }
 
     suspend fun toggleFavorite(productId: String): Boolean {

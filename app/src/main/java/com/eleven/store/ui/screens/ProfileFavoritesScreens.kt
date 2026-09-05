@@ -851,20 +851,28 @@ fun FavoritesScreen(
     onProductClick: (String) -> Unit,
     onNavigateToProducts: () -> Unit,
 ) {
-    val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
-    val allProducts by viewModel.allProducts.collectAsStateWithLifecycle()
+    // ✅ إصلاح: كانت هذه الشاشة تشتق القائمة من allProducts (حالة شاشة
+    // المنتجات المفلترة) بدل جلب بيانات المفضلة الفعلية مباشرة — انظر شرح
+    // الإصلاح الكامل في FirestoreRepository.getFavoriteProducts وMainViewModel.
+    val favProducts by viewModel.favoriteProducts.collectAsStateWithLifecycle()
+    val isLoading by viewModel.favoritesLoading.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(Unit) { viewModel.loadProducts() }
-
-    val favProducts = allProducts.filter { it.id in favoriteIds }
+    LaunchedEffect(Unit) { viewModel.loadFavoriteProducts() }
 
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
         topBar = { ElevenTopBar(title = "المفضلة") },
     ) { padding ->
-        if (favProducts.isEmpty()) {
+        if (isLoading && favProducts.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.size(48.dp))
+            }
+        } else if (favProducts.isEmpty()) {
             // ── حالة فارغة ──
             Box(
                 modifier = Modifier

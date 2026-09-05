@@ -255,7 +255,6 @@ fun CheckoutScreen(
                             2 -> PaymentStepContent(
                                 storeSettings = storeSettings,
                                 total = finalTotal,
-                                subtotal = orderTotal,
                                 discountAmount = discountAmount,
                                 onValidateCoupon = { code, onResult -> viewModel.validateCoupon(code, orderTotal, onResult) },
                                 receiptUri = receiptUri,

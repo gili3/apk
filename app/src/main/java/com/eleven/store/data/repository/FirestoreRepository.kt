@@ -578,7 +578,7 @@ class FirestoreRepository {
             favDocs.forEachIndexed { idx, favDoc ->
                 val snap = productSnaps[idx]
                 val product = if (snap.exists()) snap.toObject(Product::class.java)?.copy(id = snap.id) else null
-                if (product == null || !product.isActive) {
+                if (product == null || snap.getBoolean("isActive") == false) {
                     // المنتج لم يعد موجوداً أو أصبح غير نشط: نحذفه تلقائياً من المفضلة
                     // (مطابق تماماً لنفس التنظيف التلقائي في getFavorites بالموقع)
                     batch.delete(favRef.document(favDoc.id))

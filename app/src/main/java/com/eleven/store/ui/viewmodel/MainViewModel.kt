@@ -197,6 +197,16 @@ class MainViewModel : ViewModel() {
     private val _notifications = MutableStateFlow<List<NotificationItem>>(emptyList())
     val notifications: StateFlow<List<NotificationItem>> = _notifications
 
+    // ✅ v2: عداد "غير المقروء" الحقيقي — منفصل تماماً عن _notifications
+    // (المحدودة بـlimit(50) بـobserveNotifications)، ومصدره نفس الحقل الذي
+    // يقرأه جرس الإشعارات بالموقع (users/{uid}.notifUnreadCount)، فيتطابق
+    // الرقم المعروض بين المنصتين دائماً حتى لو تجاوز غير المقروء 50 عنصراً.
+    // Eagerly (كـcartCount/favoriteIds أعلاه): يبدأ فور إنشاء الـViewModel
+    // (أي فور تسجيل الدخول عملياً)، بغض النظر عن زيارة شاشة الإشعارات أم لا
+    // — ليظهر رقم صحيح فوراً على أي badge مستقبلي (هيدر/تبويب سفلي).
+    val unreadCount: StateFlow<Int> = repo.observeUnreadCount()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
     // ✅ إصلاح: كان أي خطأ بمستمع الإشعارات (مثال: فهرس Firestore مركّب غير
     // مُفعّل بعد لمجموعة notifications) يُكتب فقط بالـLog ولا يظهر للمستخدم
     // إطلاقاً — القائمة تبقى فارغة للأبد بدون أي تفسير أو طريقة لإعادة المحاولة.

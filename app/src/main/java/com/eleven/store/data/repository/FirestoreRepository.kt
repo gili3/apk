@@ -18,22 +18,14 @@ import kotlinx.coroutines.tasks.await
 
 class FirestoreRepository {
 
-    // ⚠️ يجب أن تُطابق هذه القيمة تماماً معرّف حساب المدير (نفس OWNER_OPEN_ID
-    // في سيرفر الموقع store/server/_core/env.ts، ونفس ADMIN_UID() في firestore.rules)
-    // حتى تصل إشعارات "طلب جديد" الناتجة عن طلبات التطبيق إلى مركز إشعارات المدير الصحيح.
-    //
-    // ✅ إصلاح حرج: كانت هذه القيمة متروكة كـ Placeholder حرفي
-    // ("REPLACE_WITH_OWNER_FIREBASE_UID") ولم تُستبدل أبداً. بما أنه نص غير
-    // فارغ، كان isNotBlank() يرجع true فيُكتب فعلياً إشعار — لكن على مستند
-    // وهمي users/REPLACE_WITH_OWNER_FIREBASE_UID/notifications لا يقرأه أحد،
-    // بينما الأدمن الحقيقي لا يصله أي إشعار "طلب جديد" لكل الطلبات القادمة
-    // من التطبيق (طلبات الموقع لم تتأثر لأنها تمر بمسار مختلف عبر OWNER_OPEN_ID
-    // بالسيرفر). الآن نتحقق فعلياً من صلاحية القيمة قبل الكتابة، ونطبّق نفس
-    // سلوك السيرفر عند عدم التهيئة (تحذير بالسجل بدل كتابة صامتة خاطئة).
-    private val ADMIN_UID = "REPLACE_WITH_OWNER_FIREBASE_UID"
-
-    private val isAdminUidConfigured: Boolean
-        get() = ADMIN_UID.isNotBlank() && ADMIN_UID != "REPLACE_WITH_OWNER_FIREBASE_UID"
+    // ✅ v2: لم يعد التطبيق يحتاج معرّف حساب المدير إطلاقاً — إشعار "طلب
+    // جديد" لصاحب المتجر تُنشئه الآن Cloud Function واحدة (onOrderCreated)
+    // تقرأ OWNER_OPEN_ID من إعدادات بيئة Cloud Functions فقط. سابقاً كان
+    // هذا المعرّف مكرَّراً بثلاثة أماكن مستقلة (هنا، env.ts بالسيرفر،
+    // firestore.rules) وكانت نسخة هذا الملف تحديداً متروكة بقيمة Placeholder
+    // حرفية لم تُستبدل أبداً، فلم يكن يصل أي إشعار "طلب جديد" لصاحب المتجر
+    // عن طلبات وصلت من التطبيق. التوحيد بمصدر واحد يمنع هذا الصنف من
+    // الأخطاء بنيوياً بدل الاعتماد على تذكّر تحديث ثلاث نسخ متطابقة يدوياً.
 
     private val db      = FirebaseFirestore.getInstance()
     private val auth    = FirebaseAuth.getInstance()
@@ -757,12 +749,22 @@ class FirestoreRepository {
         // ⚠️ ملاحظة: هذا يمنع تلاعب واجهة التطبيق بالسعر، وقواعد Firestore (firestore.rules)
         // تفرض الآن نفس التحقق من السعر/الخصم مباشرة على مستوى القاعدة أيضاً (دفاع مزدوج)
         // لأي كتابة تصل خارج التطبيق تماماً.
+        // ✅ إصلاح (ثغرة مالية): shippingCost كان يُؤخذ سابقاً مباشرة من order
+        // (كائن مبني على العميل) بلا أي إعادة اشتقاق من settings/store داخل
+        // الـtransaction — بعكس السعر والكوبون اللذين يُعاد التحقق منهما فعلياً.
+        // عميل مُعاد بناؤه (APK مفكوك) كان يستطيع إرسال shippingCost: 0 مع كل
+        // طلب. الآن يُشتق من settings/store هنا (نفس منطق shippingBase/
+        // freeShippingThreshold المستخدم بالسيرفر)، ويجب أن يطابقه أيضاً
+        // firestore.rules (shippingCostValid) كخط دفاع مستقل ثانٍ.
+        val settingsRef = db.collection("settings").document("store")
+
         val orderId = db.runTransaction { tx ->
             val productRefs = order.items.map { db.collection("products").document(it.productId) }
             val productSnaps = productRefs.map { tx.get(it) }
             val couponSnap = couponRef?.let { tx.get(it) }
             val couponUsedBySnap = couponUsedByRef?.let { tx.get(it) }
             val counterSnap = tx.get(counterRef)
+            val settingsSnap = tx.get(settingsRef)
 
             val authoritativeItems = productSnaps.mapIndexed { idx, snap ->
                 val item = order.items[idx]
@@ -797,7 +799,19 @@ class FirestoreRepository {
                 }
             }
 
-            val total = Math.round((subtotal - discountAmount + order.shippingCost) * 100) / 100.0
+            // ✅ سعر الشحن مشتق هنا من settings/store الحقيقي، وليس من order.shippingCost
+            // القادم من العميل — نفس منطق shippingBase/freeShippingThreshold بالسيرفر.
+            val shippingBase = when (val s = settingsSnap.get("shippingCost")) {
+                is Number -> s.toDouble()
+                else -> 30.0
+            }
+            val freeShippingThreshold = when (val t = settingsSnap.get("freeShippingThreshold")) {
+                is Number -> t.toDouble()
+                else -> 0.0
+            }
+            val shippingCost = if (freeShippingThreshold > 0 && subtotal >= freeShippingThreshold) 0.0 else shippingBase
+
+            val total = Math.round((subtotal - discountAmount + shippingCost) * 100) / 100.0
             val current = (counterSnap.getLong("current") ?: 11001000L)
             val next = current + 1
 
@@ -821,6 +835,7 @@ class FirestoreRepository {
                 subtotal = subtotal,
                 discount = discountAmount,
                 couponCode = appliedCoupon,
+                shippingCost = shippingCost,
                 total = total,
                 orderNumber = next.toString(),
                 verificationToken = verificationToken,
@@ -831,56 +846,22 @@ class FirestoreRepository {
             ref.id
         }.await()
 
-        // الإشعار مكتوب بنفس بنية المستند المستخدمة بالموقع والسيرفر تماماً
-        // (title/body/type/isRead/actionRoute/createdAt)، حتى يظهر فوراً بمركز
-        // إشعارات الطرفين (تطبيق + موقع) لأنهما يقرآن نفس المسار بالضبط.
-        // لا نُفشل عملية الطلب إن فشلت كتابة الإشعار وحدها (try/catch منفصل).
-        try {
-            val orderDoc = db.collection("orders").document(orderId).get().await()
-            val orderNumber = orderDoc.getString("orderNumber") ?: orderId.take(8)
-            val actionRoute = "/order/$orderId"
-
-            writeNotificationDoc(
-                userId = u,
-                title = "تم استلام طلبك ✓",
-                body = "طلبك رقم #$orderNumber تم استلامه بنجاح وسيتم مراجعته قريباً.",
-                type = "order",
-                actionRoute = actionRoute,
-            )
-
-            if (isAdminUidConfigured && ADMIN_UID != u) {
-                writeNotificationDoc(
-                    userId = ADMIN_UID,
-                    title = "طلب جديد",
-                    body = "تم استلام طلب جديد رقم #$orderNumber",
-                    type = "order",
-                    actionRoute = actionRoute,
-                )
-            } else if (!isAdminUidConfigured) {
-                Log.w("FirestoreRepository", "ADMIN_UID غير مُهيّأ في FirestoreRepository.kt — لن يصل إشعار الطلب الجديد للأدمن عن هذا الطلب (طلبات التطبيق فقط، طلبات الموقع غير متأثرة)")
-            }
-        } catch (e: Exception) {
-            Log.e("FirestoreRepo", "placeOrder: failed to write notifications for $orderId", e)
-        }
-
+        // ✅ نظام الإشعارات v2: لم يعد هذا الكود يكتب أي إشعار بنفسه.
+        // Cloud Function واحدة (functions/src/triggers/orderTriggers.ts::
+        // onOrderCreated) تلاحظ إنشاء مستند orders/{orderId} نفسه أعلاه
+        // وتُنشئ إشعارَي العميل والأدمن + ترسل Push فعلياً عبر Admin SDK.
+        // سابقاً كانت الكتابة هنا تتم مباشرة من العميل (Client SDK) فتُنشئ
+        // سجل الإشعار فقط بدون أي قدرة على إرسال Push حقيقي — أي أن صاحب
+        // المتجر لم يكن يصله أي تنبيه إطلاقاً عن طلبات وصلت من هذا التطبيق
+        // تحديداً، فقط سجل صامت يظهر إن فتح قائمة إشعاراته بنفسه صدفة.
         return orderId
     }
 
-    // ─── Notifications ──────────────────────────────────────────
-    // كتابة إشعار موحّدة — تُستخدم من placeOrder وأي مكان آخر يحتاج كتابة
-    // إشعار مباشرة على Firestore من التطبيق نفسه (بدون المرور بالسيرفر).
-    private suspend fun writeNotificationDoc(userId: String, title: String, body: String, type: String, actionRoute: String? = null) {
-        db.collection("users").document(userId).collection("notifications").add(
-            mapOf(
-                "title" to title,
-                "body" to body,
-                "type" to type,
-                "isRead" to false,
-                "actionRoute" to (actionRoute ?: ""),
-                "createdAt" to com.google.firebase.Timestamp.now(),
-            )
-        ).await()
-    }
+    // ─── Notifications (v2) ───────────────────────────────────────
+    // ⚠️ لا توجد أي دالة كتابة مباشرة على Firestore هنا بعد الآن — كل إنشاء
+    // إشعار يتم حصراً عبر Cloud Functions (Admin SDK)، انظر placeOrder أعلاه
+    // وorderTriggers.ts. القراءة فقط real-time تبقى مباشرة (مسموحة بقواعد
+    // الأمان)، والتعديل (قراءة/حذف) يمر عبر Callable Functions أدناه.
 
     // نسخة لحظية (real-time) عبر addSnapshotListener — لا يوجد استعلام "لمرّة
     // واحدة" منفصل هنا عمداً: أي إشعار جديد (Push من السيرفر يكتب هنا، أو
@@ -907,10 +888,19 @@ class FirestoreRepository {
         awaitClose { listener.remove() }
     }
 
+    // ✅ v2: تعليم "مقروء"/الحذف كتابة مباشرة على Firestore (Client SDK) —
+    // مسموحة الآن بقواعد الأمان (محصورة بحقلي isRead/readAt فقط للتعديل)،
+    // وتُصان تلقائياً بطابور offline محلي من Firestore SDK نفسه عند انقطاع
+    // الاتصال، تُزامَن فور عودته دون أي كود إضافي. عدّاد notifUnreadCount لا
+    // يتأثر بهذه الكتابة مباشرة — يُسوّى ذرّياً بواسطة Cloud Function مستقلة
+    // (notificationCounterTrigger.ts) تلاحظ هذه الكتابة نفسها بصرف النظر عن
+    // مصدرها، فيبقى صحيحاً ومطابقاً لما يعرضه الموقع دون أي استدعاء إضافي هنا.
     suspend fun markNotificationRead(notifId: String) {
         val u = uid ?: return
         db.collection("users").document(u).collection("notifications")
-            .document(notifId).update("isRead", true).await()
+            .document(notifId)
+            .update(mapOf("isRead" to true, "readAt" to Timestamp.now()))
+            .await()
     }
 
     suspend fun markAllNotificationsRead() {
@@ -918,8 +908,10 @@ class FirestoreRepository {
         val unread = db.collection("users").document(u).collection("notifications")
             .whereEqualTo("isRead", false)
             .get().await()
+        if (unread.isEmpty) return
+        val now = Timestamp.now()
         val batch = db.batch()
-        unread.documents.forEach { batch.update(it.reference, "isRead", true) }
+        unread.documents.forEach { batch.update(it.reference, mapOf("isRead" to true, "readAt" to now)) }
         batch.commit().await()
     }
 
@@ -929,8 +921,8 @@ class FirestoreRepository {
             .document(notifId).delete().await()
     }
 
-    // ✅ جديد: حذف كل إشعارات المستخدم دفعة واحدة (زر "حذف الكل") — نفس
-    // السلوك المتاح في نسخة الموقع (deleteAllNotifications بالسيرفر).
+    // حذف كل إشعارات المستخدم دفعة واحدة (زر "حذف الكل") — نفس السلوك
+    // المتاح في نسخة الموقع (deleteAllNotifications بالسيرفر).
     suspend fun deleteAllNotifications() {
         val u = uid ?: return
         val all = db.collection("users").document(u).collection("notifications")
@@ -939,6 +931,24 @@ class FirestoreRepository {
         val batch = db.batch()
         all.documents.forEach { batch.delete(it.reference) }
         batch.commit().await()
+    }
+
+    // ✅ جديد v2: عداد "غير المقروء" الحقيقي — حقل مشتق يُحدَّث ذرّياً على
+    // السيرفر (Cloud Function) مع كل إنشاء/تعليم كمقروء/حذف، بدل عدّ عناصر
+    // observeNotifications أعلاه (محدودة بـlimit(50) — تُعطي رقماً خاطئاً
+    // بمجرد تجاوز غير المقروء هذا الحد). هذا هو نفس الحقل الذي يقرأه جرس
+    // الإشعارات بالموقع مباشرة، فيتطابق الرقم المعروض على المنصتين دوماً.
+    fun observeUnreadCount(): Flow<Int> = callbackFlow {
+        val u = uid ?: run { trySend(0); awaitClose {}; return@callbackFlow }
+        val listener = db.collection("users").document(u)
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    Log.e("FirestoreRepo", "observeUnreadCount failed: ${error.message}", error)
+                    return@addSnapshotListener
+                }
+                trySend((snap?.getLong("notifUnreadCount") ?: 0L).toInt().coerceAtLeast(0))
+            }
+        awaitClose { listener.remove() }
     }
 
     // ─── FCM Token ──────────────────────────────────────────────

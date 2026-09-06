@@ -696,7 +696,11 @@ fun NotificationsScreen(
         }
     }
 
-    val unreadCount = notifications.count { !it.isRead }
+    // ✅ v2: عداد "غير المقروء" الحقيقي من viewModel.unreadCount (حقل
+    // notifUnreadCount المُسوَّى ذرّياً بسيرفر Cloud Functions) بدل عدّ
+    // العناصر المحمَّلة هنا فقط (كانت محدودة بـlimit(50) بـobserveNotifications
+    // — رقم خاطئ لأي مستخدم يتجاوز غير مقروئه هذا الحد).
+    val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
 
     // ── تجميع الإشعارات حسب التاريخ، بترتيب ثابت (اليوم أولاً) ──
     val grouped = remember(notifications) {

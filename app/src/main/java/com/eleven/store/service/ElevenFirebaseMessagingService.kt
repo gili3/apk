@@ -30,18 +30,18 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
 
         val data = remoteMessage.data
+        val notificationId = data["notificationId"]
         val title = data["title"] ?: "Eleven Store"
         val body = data["body"] ?: ""
         val type = data["type"] ?: "general"
         val actionRoute = data["actionRoute"]?.takeIf { it.isNotBlank() }
 
-        showNotification(title, body, type, actionRoute)
+        showNotification(notificationId, title, body, type, actionRoute)
 
-        // لا كتابة على "users/{uid}/notifications" من هنا عمداً — السيرفر هو
-        // من يكتب هذا السجل عند إرسال الـPush (notification-service.ts::
-        // notifyUser)، فكتابة إضافية هنا تُنتج نسخة مكرَّرة من كل إشعار.
-        // مصدر الحقيقة الوحيد لسجلّات الإشعارات هو السيرفر (أو placeOrder
-        // المحلي عند الشراء المباشر من التطبيق نفسه — راجع FirestoreRepository).
+        // لا كتابة على "users/{uid}/notifications" من هنا عمداً — سجل
+        // الإشعار مكتوب بالفعل قبل وصول هذا الـPush أصلاً (نواة notify() في
+        // functions/src/lib/notifications.ts تكتب السجل أولاً ثم ترسل الـPush
+        // بعد نجاح الكتابة)، فأي كتابة إضافية هنا تُنتج نسخة مكرَّرة صريحة.
     }
 
     override fun onNewToken(token: String) {
@@ -56,7 +56,7 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
             .addOnFailureListener { e -> Log.e("FCM", "فشل حفظ توكن الإشعارات: ${e.message}", e) }
     }
 
-    private fun showNotification(title: String, body: String, type: String, actionRoute: String?) {
+    private fun showNotification(notificationId: String?, title: String, body: String, type: String, actionRoute: String?) {
         // نفس معرّف القناة المُنشأة مسبقاً بـ ElevenStoreApp عند إقلاع
         // التطبيق (وليس معرّفاً حرفياً مكرراً هنا) — قناة واحدة موحّدة
         // للتطبيق كله، تُنشأ مرة واحدة بدل كل مرة يصل فيها إشعار.
@@ -74,9 +74,17 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
                 putExtra(MainActivity.NOTIFICATION_ROUTE_EXTRA, navRoute)
             }
         }
-        val requestCode = (title + body + System.currentTimeMillis()).hashCode()
+        // ✅ إصلاح تكرار العرض: المعرّف السابق كان مبنياً من
+        // (العنوان+النص+الوقت الحالي).hashCode() — أي فريد دوماً حتى لإعادة
+        // تسليم نفس الحدث بالضبط من FCM (نادر لكن وارد على مستوى الشبكة)،
+        // فيظهران كإشعارين منفصلين بقائمة النظام رغم كونهما نفس الحدث. الآن:
+        // notificationId قادم من السيرفر (معرّف حتمي = sha1 لمفتاح الحدث نفسه،
+        // راجع functions/src/lib/notifications.ts) فتُستبدَل أي إعادة تسليم
+        // بنفس الإشعار المعروض بدل تكديس نسخة ثانية. عند غيابه (احتياطي فقط
+        // لتوافق نسخ قديمة من السيرفر) نعود لمعرّف عشوائي كسابقاً.
+        val stableId = notificationId?.hashCode() ?: (title + body + System.currentTimeMillis()).hashCode()
         val pendingIntent = PendingIntent.getActivity(
-            this, requestCode, intent,
+            this, stableId, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -92,8 +100,6 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .build()
 
-        // معرّف فريد لكل إشعار (بدل معرّف ثابت واحد) — إشعارات متعددة تتراكم
-        // بقائمة النظام بدل أن يستبدل كل إشعار جديد سابقه فوراً.
-        notificationManager.notify(requestCode, notification)
+        notificationManager.notify(stableId, notification)
     }
 }

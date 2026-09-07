@@ -630,11 +630,20 @@ fun AddressFormCard(
     onSave: (fullName: String, phone: String, city: String, address: String, isDefault: Boolean) -> Unit,
     onCancel: () -> Unit,
 ) {
-    var fullName by remember { mutableStateOf(initial?.fullName ?: "") }
-    var phone by remember { mutableStateOf(initial?.phone ?: "") }
-    var city by remember { mutableStateOf(initial?.city ?: "") }
-    var address by remember { mutableStateOf(initial?.address ?: "") }
-    var isDefault by remember { mutableStateOf(initial?.isDefault ?: false) }
+    // ✅ إصلاح: قائمة العناوين تبقى ظاهرة مع أزرار "تعديل" الخاصة بها حتى أثناء
+    // فتح هذا النموذج (انظر مكان الاستدعاء بـProfileScreen) — لو ضغط المستخدم
+    // "تعديل" على عنوان آخر والنموذج مفتوح أصلاً، كان يتغيّر editingAddress إلى
+    // العنوان الجديد بينما remember غير المرتبط بمفتاح يُبقي حقول النموذج على
+    // قيم العنوان *القديم*. عند الحفظ، كانت هذه القيم القديمة تُكتب فعلياً تحت
+    // معرّف العنوان *الجديد* (editingAddress!!.id) — استبدال صامت لبيانات عنوان
+    // بأخرى. ربط remember بمعرّف العنوان (initial?.id) يعيد تهيئة الحقول بمجرد
+    // تغيّر هدف التعديل.
+    val formKey = initial?.id ?: "new"
+    var fullName by remember(formKey) { mutableStateOf(initial?.fullName ?: "") }
+    var phone by remember(formKey) { mutableStateOf(initial?.phone ?: "") }
+    var city by remember(formKey) { mutableStateOf(initial?.city ?: "") }
+    var address by remember(formKey) { mutableStateOf(initial?.address ?: "") }
+    var isDefault by remember(formKey) { mutableStateOf(initial?.isDefault ?: false) }
 
     Card(
         shape = RoundedCornerShape(16.dp),

@@ -129,6 +129,12 @@ object AlgoliaSearchService {
             isFeatured = hit.optBoolean("isFeatured", false),
             isBestSeller = hit.optBoolean("isBestSeller", false),
             isOnSale = hit.optBoolean("isOnSale", false),
+            // ✅ إصلاح: بدون هذا، Product.isNew المحسوبة من createdAt تبقى false
+            // دائماً لأي منتج راجع من Algolia (شارة "جديد" لا تظهر أبداً لنتائج
+            // البحث). createdAtTimestamp نفسه مُستخدَم أصلاً أعلاه في بناء فلتر
+            // "جديد" — نقرأه هنا أيضاً لبناء Timestamp متوافق مع مسار Firestore.
+            createdAt = hit.optLong("createdAtTimestamp", 0L).takeIf { it > 0 }
+                ?.let { ms -> com.google.firebase.Timestamp(ms / 1000, ((ms % 1000) * 1_000_000).toInt()) },
         )
     }
 }

@@ -15,9 +15,10 @@ data class UserProfile(
 
 // ─── Product ───────────────────────────────────────────────────
 // ⚠️ @IgnoreExtraProperties ضروري: مستند المنتج فيه حقول زائدة غير
-// موجودة بهذا الكلاس (basePrice, discountType, discountValue, createdAt,
-// updatedAt). بدون هذا الأنوتيشن، Firestore يرمي Exception عند toObject()
-// وهذا كان سبب فشل جلب المنتجات بالكامل (مع أو بدون فلتر).
+// موجودة بهذا الكلاس (basePrice, discountType, discountValue, updatedAt).
+// بدون هذا الأنوتيشن، Firestore يرمي Exception عند toObject() وهذا كان
+// سبب فشل جلب المنتجات بالكامل (مع أو بدون فلتر). createdAt نفسه أصبح
+// حقلاً مُعرَّفاً أدناه (يُستخدم لحساب isNew) وليس من الحقول الزائدة.
 @IgnoreExtraProperties
 data class Product(
     val id: String = "",
@@ -31,7 +32,6 @@ data class Product(
     val brandId: String = "",
     val stock: Int = 0,
     val isFeatured: Boolean = false,
-    val isNew: Boolean = false,
     val isBestSeller: Boolean = false,
     val isOnSale: Boolean = false,     // الحقل الحقيقي في Firestore
     // ⚠️ تم حذف حقل onSale المكرر — كان يتعارض مع isOnSale على مستوى
@@ -40,11 +40,32 @@ data class Product(
     // عند كل عملية toObject(Product::class.java)، وهذا كان السبب
     // الحقيقي لفشل جلب كل المنتجات بدون استثناء.
     val tags: List<String> = emptyList(),
+    // ✅ إصلاح: لا يوجد حقل isNew Boolean في مستند المنتج إطلاقاً (نفس ما
+    // توثقه FirestoreRepository.getProducts وAlgoliaSearchService عند فلترة
+    // "جديد" بنافذة تاريخية بدل حقل وهمي). كان isNew سابقاً حقلاً مخزَّناً
+    // بقيمة افتراضية false تُقرأ حرفياً من toObject()/من نتائج Algolia حيث لا
+    // يوجد الحقل أصلاً — فتبقى false دائماً، ما يعني أن شارة "جديد" في شاشة
+    // تفاصيل المنتج (ProductDetailScreen) لم تكن تظهر إطلاقاً لأي منتج مهما
+    // كان حديثاً. الآن نحسبها من createdAt بنفس نافذة الـ30 يوماً المستخدمة
+    // في كل مكان آخر بالتطبيق.
+    val createdAt: Timestamp? = null,
 ) {
     val mainImage: String get() = images.firstOrNull()?.takeIf { it.isNotBlank() } ?: image
     val discountPercent: Int?
         get() = if (originalPrice != null && originalPrice > price)
             ((1 - price / originalPrice) * 100).toInt() else null
+
+    val isNew: Boolean
+        get() {
+            val created = createdAt?.toDate()?.time ?: return false
+            return System.currentTimeMillis() - created <= NEW_PRODUCT_WINDOW_MS
+        }
+
+    companion object {
+        // يجب أن تبقى مطابقة لنفس القيمة في FirestoreRepository.getProducts
+        // وAlgoliaSearchService.NEW_PRODUCT_WINDOW_MS وclient/src/lib/algolia.ts بالموقع
+        const val NEW_PRODUCT_WINDOW_MS = 30L * 24 * 60 * 60 * 1000
+    }
 }
 
 // ─── Category ──────────────────────────────────────────────────

@@ -562,10 +562,21 @@ class MainViewModel : ViewModel() {
     }
 
     // ✅ جديد: حذف كل الإشعارات — مطابق لزر "حذف الكل" في نسخة الموقع.
+    // ✅ إصلاح: لم يكن هناك أي تراجع عند فشل الحذف الفعلي على Firestore
+    // (خلافاً لبقية دوال الإشعارات أعلاه التي تتبع كلها نفس نمط
+    // optimistic update + rollback) — كانت القائمة تظهر فارغة للمستخدم
+    // حتى لو فشلت العملية فعلياً (بلا اتصال مثلاً)، بينما الإشعارات لا تزال
+    // موجودة على الخادم.
     fun deleteAllNotifications() {
+        val previous = _notifications.value
         _notifications.value = emptyList()
         viewModelScope.launch {
-            try { repo.deleteAllNotifications() } catch (_: Exception) { }
+            try {
+                repo.deleteAllNotifications()
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل حذف كل الإشعارات، سيتم التراجع", e)
+                _notifications.value = previous
+            }
         }
     }
 

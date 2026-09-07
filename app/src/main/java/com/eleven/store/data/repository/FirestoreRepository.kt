@@ -149,6 +149,24 @@ class FirestoreRepository {
         user.delete().await()
     }
 
+    // ✅ إصلاح: deleteAccount(currentPassword) يفترض دائماً حساب بريد/كلمة
+    // مرور (EmailAuthProvider). حسابات Google (لا تملك كلمة مرور محلية) كانت
+    // تُستدعى بنفس المسار بكلمة مرور فارغة فتفشل إعادة المصادقة دائماً، ولا
+    // يمكن حذف الحساب فعلياً. هذا المسار المنفصل يعيد المصادقة بـcredential
+    // من Google (idToken حديث من GoogleSignInClient) قبل الحذف.
+    suspend fun deleteAccountWithGoogle(idToken: String) {
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
+        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+        user.reauthenticate(credential).await()
+        user.delete().await()
+    }
+
+    /** هل المستخدم الحالي مسجَّل عبر Google (لا يملك كلمة مرور محلية)؟ */
+    fun isCurrentUserGoogleAccount(): Boolean =
+        auth.currentUser?.providerData?.any {
+            it.providerId == com.google.firebase.auth.GoogleAuthProvider.PROVIDER_ID
+        } ?: false
+
     // ✅ إصلاح خصوصية: نحذف توكن FCM الخاص *بهذا الجهاز تحديداً* من fcmTokens
     // قبل تسجيل الخروج فعلياً. بدون هذا، لو استُخدم نفس الجهاز لاحقاً من
     // مستخدم آخر (جهاز مشترك)، يبقى توكن الحساب الأول مسجَّلاً وموجّهاً

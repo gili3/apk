@@ -127,8 +127,7 @@ fun ElevenApp(
     val viewModel: MainViewModel = viewModel()
     val cartCount by viewModel.cartCount.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
-    val notifications by viewModel.notifications.collectAsStateWithLifecycle()
-    val unreadCount = notifications.count { !it.isRead }
+    val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
 
     // فتح المسار المطلوب من إشعار تم الضغط عليه (order/{id} أو notifications
     // مثلاً) — يعمل سواء كان التطبيق مغلقاً (أول إطلاق) أو مفتوحاً أصلاً

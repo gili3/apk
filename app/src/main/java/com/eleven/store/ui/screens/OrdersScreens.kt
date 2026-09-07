@@ -90,11 +90,46 @@ fun OrdersScreen(
     onBack: () -> Unit,
     onOrderClick: (String) -> Unit,
     onStartShopping: () -> Unit = onBack,
+    onNavigateToLogin: () -> Unit = onBack,
 ) {
+    val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val orders by viewModel.orders.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
-    LaunchedEffect(Unit) { viewModel.loadOrders() }
+    LaunchedEffect(user) { if (user != null) viewModel.loadOrders() }
+
+    // ✅ إصلاح: FirestoreRepository.getOrders() تُرجع قائمة فارغة بصمت
+    // لزائر غير مسجّل دخول (uid == null) بدل رمي خطأ — فكانت هذه الشاشة
+    // تعرض "لا توجد طلبات بعد" المُضلِّلة تماماً كما في نسخة الموقع
+    // (Orders.tsx، تم إصلاحها بنفس المنطق).
+    if (user == null) {
+        Scaffold(topBar = { ElevenTopBar(title = "طلباتي", onBack = onBack) }) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.ShoppingBag,
+                        null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MutedForeground,
+                    )
+                    Text(
+                        "يرجى تسجيل الدخول لعرض طلباتك",
+                        color = MutedForeground,
+                        fontSize = 16.sp,
+                    )
+                    ElevenButton(
+                        text = "تسجيل الدخول",
+                        onClick = onNavigateToLogin,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
 
     Scaffold(topBar = { ElevenTopBar(title = "طلباتي", onBack = onBack) }) { padding ->
         when {

@@ -5,7 +5,23 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -16,7 +32,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.eleven.store.ui.components.ElevenButton
+import com.eleven.store.ui.components.ElevenTopBar
 import com.eleven.store.ui.screens.*
+import com.eleven.store.ui.theme.Accent
+import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.viewmodel.MainViewModel
 
 // ─── Route constants ────────────────────────────────────────────
@@ -148,9 +168,39 @@ fun ElevenNavGraph(
             val quantity  = back.arguments?.getInt("quantity") ?: 1
             // نجلب المنتج ونبني CartItem هنا ونمرره لـ CheckoutScreen
             val product by viewModel.selectedProduct.collectAsStateWithLifecycle()
+            val isLoadingProduct by viewModel.isProductLoading.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(productId) { viewModel.loadProduct(productId) }
             val p = product
-            if (p != null) {
+            if (isLoadingProduct) {
+                Scaffold(
+                    topBar = { ElevenTopBar(title = "إتمام الطلب", onBack = { navController.popBackStack() }) },
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Accent, strokeWidth = 3.dp)
+                    }
+                }
+            } else if (p == null) {
+                // ✅ المنتج غير موجود/محذوف — رسالة واضحة بدل شاشة فارغة تماماً
+                Scaffold(
+                    topBar = { ElevenTopBar(title = "إتمام الطلب", onBack = { navController.popBackStack() }) },
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.padding(32.dp),
+                        ) {
+                            Icon(Icons.Filled.ErrorOutline, null, modifier = Modifier.size(56.dp), tint = MutedForeground)
+                            Text(
+                                "هذا المنتج غير متاح، قد يكون قد حُذف أو نفدت كميته",
+                                textAlign = TextAlign.Center,
+                                color = MutedForeground,
+                            )
+                            ElevenButton(text = "العودة", onClick = { navController.popBackStack() })
+                        }
+                    }
+                }
+            } else {
                 val buyNowItem = com.eleven.store.data.model.CartItem(
                     id = p.id, productId = p.id, name = p.name,
                     price = p.price, quantity = quantity, image = p.mainImage,
@@ -174,6 +224,7 @@ fun ElevenNavGraph(
                 onNavigateToProducts = {
                     navController.navigate(Route.PRODUCTS) { popUpTo(Route.FAVORITES) { inclusive = true } }
                 },
+                onNavigateToLogin = { navController.navigate(Route.LOGIN) },
             )
         }
         composable(Route.PROFILE) {
@@ -190,6 +241,7 @@ fun ElevenNavGraph(
                 onBack = { navController.popBackStack() },
                 onOrderClick = { navController.navigate(Route.orderDetail(it)) },
                 onStartShopping = { navController.navigate(Route.PRODUCTS) },
+                onNavigateToLogin = { navController.navigate(Route.LOGIN) },
             )
         }
         composable(
@@ -232,6 +284,7 @@ fun ElevenNavGraph(
             SettingsScreen(
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
+                onNavigateToLogin = { navController.navigate(Route.LOGIN) },
             )
         }
         composable(Route.NOTIFICATIONS) {

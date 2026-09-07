@@ -1,5 +1,6 @@
 package com.eleven.store.ui.viewmodel
 
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,15 @@ class MainViewModel : ViewModel() {
             catch (e: Exception) { onResult(false, e.message) }
         }
     }
+
+    fun deleteAccountWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.deleteAccountWithGoogle(idToken); onResult(true, null) }
+            catch (e: Exception) { onResult(false, e.message) }
+        }
+    }
+
+    fun isCurrentUserGoogleAccount(): Boolean = repo.isCurrentUserGoogleAccount()
 
     fun register(name: String, email: String, phone: String, password: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
@@ -460,25 +470,47 @@ class MainViewModel : ViewModel() {
     }
 
     fun markNotificationRead(notifId: String) {
-        _notifications.value = _notifications.value.map {
+        val previous = _notifications.value
+        _notifications.value = previous.map {
             if (it.id == notifId) it.copy(isRead = true) else it
         }
         viewModelScope.launch {
-            try { repo.markNotificationRead(notifId) } catch (_: Exception) { }
+            try {
+                repo.markNotificationRead(notifId)
+            } catch (e: Exception) {
+                // ✅ إصلاح: التحديث كان "متفائلاً" (optimistic) بلا أي تراجع عند
+                // فشل الكتابة الفعلية على Firestore — تظل القائمة المحلية تُظهر
+                // العنصر كمقروء للأبد رغم أن الخادم لا يزال يعتبره غير مقروء،
+                // فيتعارض هذا مع عداد unreadCount الحقيقي (المُصلَح أعلاه).
+                Log.w("MainViewModel", "فشل تحديث حالة القراءة، سيتم التراجع", e)
+                _notifications.value = previous
+            }
         }
     }
 
     fun markAllNotificationsRead() {
-        _notifications.value = _notifications.value.map { it.copy(isRead = true) }
+        val previous = _notifications.value
+        _notifications.value = previous.map { it.copy(isRead = true) }
         viewModelScope.launch {
-            try { repo.markAllNotificationsRead() } catch (_: Exception) { }
+            try {
+                repo.markAllNotificationsRead()
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل تحديد الكل كمقروء، سيتم التراجع", e)
+                _notifications.value = previous
+            }
         }
     }
 
     fun deleteNotification(notifId: String) {
-        _notifications.value = _notifications.value.filterNot { it.id == notifId }
+        val previous = _notifications.value
+        _notifications.value = previous.filterNot { it.id == notifId }
         viewModelScope.launch {
-            try { repo.deleteNotification(notifId) } catch (_: Exception) { }
+            try {
+                repo.deleteNotification(notifId)
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل حذف الإشعار، سيتم التراجع", e)
+                _notifications.value = previous
+            }
         }
     }
 

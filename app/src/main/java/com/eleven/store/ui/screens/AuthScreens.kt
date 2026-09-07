@@ -82,7 +82,7 @@ private const val GOOGLE_WEB_CLIENT_ID =
     "418964206430-qge3vqln3bdv4rofe8q485fceg0emj55.apps.googleusercontent.com"
 
 /** يبني GoogleSignInClient بنفس إعدادات الويب */
-private fun buildGoogleSignInClient(context: android.content.Context) =
+internal fun buildGoogleSignInClient(context: android.content.Context) =
     com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(
         context,
         com.google.android.gms.auth.api.signin.GoogleSignInOptions

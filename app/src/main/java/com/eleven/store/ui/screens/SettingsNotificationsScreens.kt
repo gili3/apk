@@ -1,5 +1,6 @@
 package com.eleven.store.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -46,6 +47,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
+    onNavigateToLogin: () -> Unit = onBack,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
@@ -64,6 +66,46 @@ fun SettingsScreen(
     var isLoading by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // ✅ إصلاح: حذف الحساب لم يكن يطلب تأكيداً ولا كلمة مرور — كان يستدعي
+    // deleteAccount("") مباشرة، فيفشل دائماً لحسابات البريد (إعادة المصادقة
+    // تحتاج كلمة مرور صحيحة) ولا يعالج حسابات Google إطلاقاً. الآن نعرض
+    // نافذة تأكيد، ونطلب كلمة المرور لحسابات البريد أو إعادة مصادقة Google
+    // فعلية لحسابات Google، قبل تنفيذ الحذف.
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    var deletePassword by remember { mutableStateOf("") }
+    var showDeletePw by remember { mutableStateOf(false) }
+    var isDeleting by remember { mutableStateOf(false) }
+    val isGoogleAccount = remember { viewModel.isCurrentUserGoogleAccount() }
+    val deleteGoogleLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = com.google.android.gms.auth.api.signin.GoogleSignIn
+            .getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
+            val idToken = account?.idToken
+            if (idToken == null) {
+                isDeleting = false
+                scope.launch { snackbarHostState.showMessage("تعذّرت إعادة المصادقة عبر Google", SnackbarType.ERROR) }
+                return@rememberLauncherForActivityResult
+            }
+            viewModel.deleteAccountWithGoogle(idToken) { ok, msg ->
+                isDeleting = false
+                scope.launch {
+                    if (ok) {
+                        showDeleteAccountDialog = false
+                        snackbarHostState.showMessage("تم حذف الحساب بنجاح", SnackbarType.SUCCESS)
+                    } else {
+                        snackbarHostState.showMessage(msg ?: "فشل حذف الحساب", SnackbarType.ERROR)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            isDeleting = false
+            scope.launch { snackbarHostState.showMessage("تعذّرت إعادة المصادقة عبر Google", SnackbarType.ERROR) }
+        }
+    }
 
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
@@ -157,6 +199,11 @@ fun SettingsScreen(
                                 Spacer(Modifier.height(8.dp))
                             }
 
+                            // ✅ إصلاح: كانت أزرار "تغيير كلمة المرور" و"حذف
+                            // الحساب" تظهر دائماً حتى بلا تسجيل دخول، فتفشل
+                            // بصمت أو برسالة عامة عند الضغط عليها بدل توضيح
+                            // أن المستخدم يحتاج تسجيل الدخول أولاً.
+                            if (user != null) {
                             // زر تغيير كلمة المرور
                             Row(
                                 modifier = Modifier
@@ -414,23 +461,8 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        scope.launch {
-                                            viewModel.deleteAccount("") { ok, msg ->
-                                                scope.launch {
-                                                    if (ok) {
-                                                        snackbarHostState.showMessage(
-                                                            "تم حذف الحساب بنجاح",
-                                                            SnackbarType.SUCCESS
-                                                        )
-                                                    } else {
-                                                        snackbarHostState.showMessage(
-                                                            msg ?: "فشل حذف الحساب",
-                                                            SnackbarType.ERROR
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        deletePassword = ""
+                                        showDeleteAccountDialog = true
                                     }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -454,6 +486,22 @@ fun SettingsScreen(
                                     tint = MutedForeground,
                                     modifier = Modifier.size(18.dp),
                                 )
+                            }
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Text(
+                                        "سجّل الدخول لإدارة إعدادات حسابك",
+                                        color = MutedForeground,
+                                        fontSize = 14.sp,
+                                    )
+                                    ElevenButton(text = "تسجيل الدخول", onClick = onNavigateToLogin)
+                                }
                             }
                         }
                     }
@@ -614,6 +662,92 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    // ✅ نافذة تأكيد حذف الحساب — تطلب كلمة المرور الحالية لحسابات
+    // البريد/كلمة المرور (لأن reauthenticate يحتاجها)، أو زر إعادة مصادقة
+    // عبر Google لحسابات Google (لا تملك كلمة مرور محلية أصلاً).
+    if (showDeleteAccountDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) showDeleteAccountDialog = false },
+            title = { Text("حذف الحساب نهائياً", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "سيتم حذف حسابك وكل بياناته نهائياً، ولا يمكن التراجع عن هذا الإجراء.",
+                        fontSize = 14.sp,
+                        color = MutedForeground,
+                    )
+                    if (isGoogleAccount) {
+                        Text(
+                            "للمتابعة، يجب تأكيد هويتك عبر Google مرة أخرى.",
+                            fontSize = 13.sp,
+                            color = MutedForeground,
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = deletePassword,
+                            onValueChange = { deletePassword = it },
+                            placeholder = { Text("كلمة المرور الحالية", fontSize = 14.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { showDeletePw = !showDeletePw }) {
+                                    Icon(
+                                        if (showDeletePw) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        null,
+                                        tint = MutedForeground,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            },
+                            visualTransformation = if (showDeletePw) VisualTransformation.None else PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !isDeleting,
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !isDeleting && (isGoogleAccount || deletePassword.isNotBlank()),
+                    colors = ButtonDefaults.buttonColors(containerColor = Destructive),
+                    onClick = {
+                        if (isGoogleAccount) {
+                            isDeleting = true
+                            val googleClient = buildGoogleSignInClient(context)
+                            deleteGoogleLauncher.launch(googleClient.signInIntent)
+                        } else {
+                            isDeleting = true
+                            viewModel.deleteAccount(deletePassword) { ok, msg ->
+                                isDeleting = false
+                                if (ok) {
+                                    showDeleteAccountDialog = false
+                                    scope.launch {
+                                        snackbarHostState.showMessage("تم حذف الحساب بنجاح", SnackbarType.SUCCESS)
+                                    }
+                                } else {
+                                    scope.launch {
+                                        snackbarHostState.showMessage(msg ?: "فشل حذف الحساب", SnackbarType.ERROR)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    Text(if (isDeleting) "جاري الحذف..." else "حذف نهائياً", color = Color.White)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    enabled = !isDeleting,
+                    onClick = { showDeleteAccountDialog = false },
+                ) { Text("إلغاء") }
+            },
+        )
     }
 }
 

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
@@ -69,6 +70,11 @@ fun HomeScreen(
     val brands by viewModel.brands.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // ✅ جديد: يميّز "فشل تحميل الصفحة الرئيسية فعلياً" عن حالة عادية طبيعية
+    val loadError by viewModel.error.collectAsStateWithLifecycle()
+    val hasAnyContent = banners.isNotEmpty() || categories.isNotEmpty() ||
+        featuredProducts.isNotEmpty() || newArrivals.isNotEmpty() ||
+        bestSellers.isNotEmpty() || onSaleProducts.isNotEmpty()
 
     LazyColumn(
         modifier = Modifier
@@ -76,6 +82,50 @@ fun HomeScreen(
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(bottom = 80.dp),
     ) {
+        // ── فشل تحميل فعلي (شبكة/سيرفر) ولا يوجد أي محتوى معروض أصلاً ──
+        // ✅ لو فيه محتوى مسبق (من تحميل سابق ناجح) لا نُخفيه بسبب فشل
+        // مؤقت لاحق — نعرض التنبيه فقط لو الصفحة فارغة تماماً بسببه.
+        if (loadError != null && !hasAnyContent && !isLoading) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 48.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(
+                        Icons.Filled.CloudOff,
+                        contentDescription = null,
+                        tint = MutedForeground,
+                        modifier = Modifier.size(56.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "تعذّر تحميل الصفحة الرئيسية",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { viewModel.loadHomeData() },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                    ) {
+                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         // ── 1. Banner Slider — mx-4 mt-3 rounded-2xl h-200 ──────
         item {
             BannerSlider(

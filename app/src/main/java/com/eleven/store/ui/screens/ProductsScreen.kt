@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
@@ -54,6 +55,8 @@ fun ProductsScreen(
     val products by viewModel.allProducts.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // ✅ جديد: نميّز فشل التحميل الفعلي (شبكة/سيرفر) عن "لا توجد منتجات فعلاً"
+    val loadError by viewModel.error.collectAsStateWithLifecycle()
 
     // ── حالة الفلاتر — مطابق للموقع ─────────────────────────────
     var selectedCategory by remember {
@@ -65,8 +68,9 @@ fun ProductsScreen(
     var selectedBrand by remember { mutableStateOf("all") }
     var searchQuery by remember { mutableStateOf(initialSearch) }
 
-    // تحميل المنتجات عند تغيّر الفلاتر
-    LaunchedEffect(selectedCategory, filterType, selectedBrand, searchQuery) {
+    // ✅ دالة إعادة تحميل موحّدة — تُستخدم في LaunchedEffect وأيضاً بزر
+    // "إعادة المحاولة" عند فشل التحميل، بدل تكرار نفس المعاملات مرتين
+    val reloadProducts: () -> Unit = {
         viewModel.loadProducts(
             categoryId = selectedCategory.takeIf { it != "all" },
             isFeatured = if (filterType == "featured") true else null,
@@ -76,6 +80,11 @@ fun ProductsScreen(
             brandId = if (filterType == "brands" && selectedBrand != "all") selectedBrand else null,
             searchQuery = searchQuery.trim().takeIf { it.isNotEmpty() },
         )
+    }
+
+    // تحميل المنتجات عند تغيّر الفلاتر
+    LaunchedEffect(selectedCategory, filterType, selectedBrand, searchQuery) {
+        reloadProducts()
     }
 
     Scaffold(
@@ -405,6 +414,44 @@ fun ProductsScreen(
                             strokeWidth = 3.dp,
                             modifier = Modifier.size(48.dp),
                         )
+                    }
+                }
+
+                // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "لا توجد نتائج" ──
+                loadError != null -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.CloudOff,
+                            contentDescription = null,
+                            tint = MutedForeground,
+                            modifier = Modifier.size(56.dp),
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "تعذّر تحميل المنتجات",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                            color = MutedForeground,
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = { reloadProducts() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                        ) {
+                            Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 

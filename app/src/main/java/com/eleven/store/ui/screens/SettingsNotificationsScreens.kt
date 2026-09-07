@@ -370,10 +370,10 @@ fun SettingsScreen(
                                     ) {
                                         Button(
                                             onClick = {
-                                                if (newPassword.length < 6) {
+                                                if (newPassword.length < 8) {
                                                     scope.launch {
                                                         snackbarHostState.showMessage(
-                                                            "كلمة المرور يجب أن تكون 6 أحرف على الأقل",
+                                                            "كلمة المرور يجب أن تكون 8 أحرف على الأقل",
                                                             SnackbarType.ERROR
                                                         )
                                                     }

@@ -93,81 +93,6 @@ internal fun buildGoogleSignInClient(context: android.content.Context) =
     )
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTH VALIDATION — تحقق حقيقي من صيغة المدخلات (بدل isBlank فقط)
-// ═══════════════════════════════════════════════════════════════
-
-private object AuthValidation {
-
-    // نفس نمط RFC-5322 المبسّط المستخدم عادة في نماذج الويب — يرفض
-    // "asd" أو "asd@asd" لكنه يقبل أي بريد صحيح فعلياً
-    private val EMAIL_REGEX = Regex(
-        "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
-    )
-
-    // يقبل أرقام سعودية/دولية بصيغ شائعة: +9665xxxxxxxx أو 05xxxxxxxx أو دولي عام
-    private val PHONE_REGEX = Regex("^\\+?[0-9]{8,15}$")
-
-    fun isValidEmail(email: String): Boolean = EMAIL_REGEX.matches(email.trim())
-
-    fun isValidPhone(phone: String): Boolean =
-        phone.isBlank() || PHONE_REGEX.matches(phone.trim().replace(" ", ""))
-
-    fun emailError(email: String): String? = when {
-        email.isBlank() -> "يرجى إدخال البريد الإلكتروني"
-        !isValidEmail(email) -> "صيغة البريد الإلكتروني غير صحيحة"
-        else -> null
-    }
-
-    fun loginPasswordError(password: String): String? =
-        if (password.isBlank()) "يرجى إدخال كلمة المرور" else null
-
-    fun nameError(name: String): String? = when {
-        name.trim().isBlank() -> "يرجى إدخال الاسم"
-        name.trim().length < 3 -> "الاسم يجب أن يكون 3 أحرف على الأقل"
-        else -> null
-    }
-
-    fun phoneError(phone: String): String? =
-        if (!isValidPhone(phone)) "رقم الهاتف غير صحيح" else null
-
-    fun passwordError(password: String): String? = when {
-        password.isBlank() -> "يرجى إدخال كلمة المرور"
-        password.length < 8 -> "كلمة المرور يجب أن تكون 8 أحرف على الأقل"
-        else -> null
-    }
-
-    fun confirmPasswordError(password: String, confirm: String): String? = when {
-        confirm.isBlank() -> "يرجى تأكيد كلمة المرور"
-        password != confirm -> "كلمتا المرور غير متطابقتين"
-        else -> null
-    }
-
-    /** قوة كلمة المرور: 0 = فارغة/ضعيفة جداً، 1 = ضعيفة، 2 = متوسطة، 3 = قوية */
-    fun passwordStrength(password: String): Int {
-        if (password.isEmpty()) return 0
-        var score = 0
-        if (password.length >= 8) score++
-        if (password.length >= 10) score++
-        if (password.any { it.isDigit() } && password.any { it.isLetter() }) score++
-        if (password.any { !it.isLetterOrDigit() }) score++
-        return score.coerceIn(0, 3)
-    }
-
-    fun passwordStrengthLabel(strength: Int): String = when (strength) {
-        0 -> "ضعيفة جداً"
-        1 -> "ضعيفة"
-        2 -> "متوسطة"
-        else -> "قوية"
-    }
-
-    fun passwordStrengthColor(strength: Int): Color = when (strength) {
-        0, 1 -> Color(0xFFEF4444)
-        2 -> Color(0xFFF97316)
-        else -> Color(0xFF22C55E)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
 //  LOGO — مطابق للموقع: 11 / ELEVEN
 //  <span className="text-4xl font-bold">11</span>
 //  <span className="text-xs tracking-widest font-bold">ELEVEN</span>
@@ -349,49 +274,27 @@ private fun AuthTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     singleLine: Boolean = true,
-    enabled: Boolean = true,
-    // ✅ جديد: رسالة خطأ خاصة بهذا الحقل تظهر تحته مباشرة (بدل الاعتماد
-    // فقط على صندوق خطأ عام أعلى النموذج لا يوضّح أي حقل فيه المشكلة)
-    errorMessage: String? = null,
-    imeAction: androidx.compose.ui.text.input.ImeAction = androidx.compose.ui.text.input.ImeAction.Default,
-    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            placeholder = { Text(placeholder, color = MutedForeground) },
-            leadingIcon = leadingIcon,
-            trailingIcon = trailingIcon,
-            visualTransformation = visualTransformation,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp),
-            singleLine = singleLine,
-            enabled = enabled,
-            isError = errorMessage != null,
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
-            keyboardActions = keyboardActions,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                unfocusedBorderColor = Border,
-                errorBorderColor = Destructive,
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
-            ),
-        )
-        if (errorMessage != null) {
-            Text(
-                errorMessage,
-                color = Destructive,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 4.dp, start = 4.dp),
-            )
-        }
-    }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder, color = MutedForeground) },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        visualTransformation = visualTransformation,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp),
+        singleLine = singleLine,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        shape = RoundedCornerShape(8.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Accent,
+            unfocusedBorderColor = Border,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        ),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -437,12 +340,6 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var showForgotPassword by remember { mutableStateOf(false) }
-    // ✅ جديد: أخطاء لحظية لكل حقل — تُحسب فقط بعد أول محاولة إرسال حتى لا
-    // تظهر رسائل حمراء للمستخدم قبل ما يكتب أي شيء أصلاً
-    var attemptedSubmit by remember { mutableStateOf(false) }
-    val emailError = if (attemptedSubmit) AuthValidation.emailError(email) else null
-    val passwordError = if (attemptedSubmit) AuthValidation.loginPasswordError(password) else null
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     val googleClient = remember { buildGoogleSignInClient(context) }
     val googleLauncher = rememberLauncherForActivityResult(
@@ -539,12 +436,6 @@ fun LoginScreen(
                             )
                         },
                         keyboardType = KeyboardType.Email,
-                        enabled = !isLoading,
-                        errorMessage = emailError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
-                        ),
                     )
 
                     Spacer(Modifier.height(20.dp))
@@ -597,12 +488,6 @@ fun LoginScreen(
                         },
                         visualTransformation = if (showPassword) VisualTransformation.None
                         else PasswordVisualTransformation(),
-                        enabled = !isLoading,
-                        errorMessage = passwordError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onDone = { focusManager.clearFocus() }
-                        ),
                     )
 
                     Spacer(Modifier.height(24.dp))
@@ -610,17 +495,9 @@ fun LoginScreen(
                     // ── Login Button ──────────────────────────
                     Button(
                         onClick = {
-                            attemptedSubmit = true
-                            // ✅ تحقق محلي فوري قبل مناداة Firebase — يمنع طلب شبكة
-                            // غير ضروري لبريد بصيغة خاطئة واضحة، ويوجّه المستخدم
-                            // فوراً لمكان الخطأ بدل رسالة عامة بعد انتظار الشبكة
-                            val localError = AuthValidation.emailError(email)
-                                ?: AuthValidation.loginPasswordError(password)
-                            if (localError != null) return@Button
-
                             isLoading = true
                             error = ""
-                            viewModel.login(email.trim(), password) { ok, msg ->
+                            viewModel.login(email, password) { ok, msg ->
                                 isLoading = false
                                 if (ok) onLoginSuccess()
                                 else error = msg ?: "فشل تسجيل الدخول"
@@ -852,19 +729,6 @@ fun RegisterScreen(
     var showConfirm by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    // ✅ جديد: تظهر أخطاء الحقول فقط بعد أول محاولة إرسال
-    var attemptedSubmit by remember { mutableStateOf(false) }
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-
-    val nameError = if (attemptedSubmit) AuthValidation.nameError(name) else null
-    val emailError = if (attemptedSubmit) AuthValidation.emailError(email) else null
-    val phoneError = if (attemptedSubmit) AuthValidation.phoneError(phone) else null
-    val passwordError = if (attemptedSubmit) AuthValidation.passwordError(password) else null
-    // ✅ تطابق التأكيد يظهر بمجرد ما المستخدم يبدأ يكتب فيه (مو لازم ينتظر submit)
-    // — تجربة أفضل، لأن هذا الحقل بطبيعته تفاعلي أثناء الكتابة
-    val confirmPasswordError = if (confirmPassword.isNotEmpty() || attemptedSubmit)
-        AuthValidation.confirmPasswordError(password, confirmPassword) else null
-    val passwordStrength = AuthValidation.passwordStrength(password)
 
     val googleClient = remember { buildGoogleSignInClient(context) }
     val googleLauncher = rememberLauncherForActivityResult(
@@ -887,13 +751,12 @@ fun RegisterScreen(
         }
     }
 
-    // ✅ تحقق أدق من قواعد صيغة البريد/الهاتف، بدل isBlank فقط سابقاً
+    // ✅ نفس قواعد التحقق من Register.tsx
     fun validate(): String? {
-        AuthValidation.nameError(name)?.let { return it }
-        AuthValidation.emailError(email)?.let { return it }
-        AuthValidation.phoneError(phone)?.let { return it }
-        AuthValidation.passwordError(password)?.let { return it }
-        AuthValidation.confirmPasswordError(password, confirmPassword)?.let { return it }
+        if (name.trim().length < 3) return "الاسم يجب أن يكون 3 أحرف على الأقل"
+        if (email.isBlank()) return "يرجى إدخال البريد الإلكتروني"
+        if (password.length < 6) return "كلمة المرور يجب أن تكون 6 أحرف على الأقل"
+        if (password != confirmPassword) return "كلمتا المرور غير متطابقتين"
         if (!agreeTerms) return "يجب الموافقة على الشروط والأحكام"
         return null
     }
@@ -956,12 +819,6 @@ fun RegisterScreen(
                                 modifier = Modifier.size(22.dp),
                             )
                         },
-                        enabled = !isLoading,
-                        errorMessage = nameError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
-                        ),
                     )
 
                     Spacer(Modifier.height(16.dp))
@@ -982,12 +839,6 @@ fun RegisterScreen(
                             )
                         },
                         keyboardType = KeyboardType.Email,
-                        enabled = !isLoading,
-                        errorMessage = emailError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
-                        ),
                     )
 
                     Spacer(Modifier.height(16.dp))
@@ -1020,12 +871,6 @@ fun RegisterScreen(
                             )
                         },
                         keyboardType = KeyboardType.Phone,
-                        enabled = !isLoading,
-                        errorMessage = phoneError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
-                        ),
                     )
 
                     Spacer(Modifier.height(16.dp))
@@ -1058,48 +903,7 @@ fun RegisterScreen(
                         },
                         visualTransformation = if (showPassword) VisualTransformation.None
                         else PasswordVisualTransformation(),
-                        enabled = !isLoading,
-                        errorMessage = passwordError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
-                        ),
                     )
-
-                    // ── Password Strength Meter ───────────────
-                    // ✅ جديد: يعطي المستخدم إشارة فورية عن قوة كلمة المرور
-                    // وهو يكتب، بدل ما يكتشف إنها "ضعيفة" فقط بعد محاولة الإرسال
-                    if (password.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(modifier = Modifier.weight(1f)) {
-                                repeat(3) { index ->
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(4.dp)
-                                            .padding(end = if (index < 2) 4.dp else 0.dp)
-                                            .background(
-                                                if (index < passwordStrength)
-                                                    AuthValidation.passwordStrengthColor(passwordStrength)
-                                                else Border,
-                                                RoundedCornerShape(2.dp),
-                                            )
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                AuthValidation.passwordStrengthLabel(passwordStrength),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = AuthValidation.passwordStrengthColor(passwordStrength),
-                            )
-                        }
-                    }
 
                     Spacer(Modifier.height(16.dp))
 
@@ -1119,35 +923,18 @@ fun RegisterScreen(
                             )
                         },
                         trailingIcon = {
-                            // ✅ عند التطابق يظهر تلميح أخضر بدل مجرد أيقونة إظهار/إخفاء،
-                            // تأكيد بصري فوري للمستخدم إنه كتب كلمة المرور صح
-                            if (confirmPassword.isNotEmpty() && password == confirmPassword) {
+                            IconButton(onClick = { showConfirm = !showConfirm }) {
                                 Icon(
-                                    Icons.Filled.CheckCircle,
+                                    if (showConfirm) Icons.Filled.VisibilityOff
+                                    else Icons.Filled.Visibility,
                                     null,
-                                    tint = Color(0xFF22C55E),
+                                    tint = MutedForeground,
                                     modifier = Modifier.size(22.dp),
                                 )
-                            } else {
-                                IconButton(onClick = { showConfirm = !showConfirm }) {
-                                    Icon(
-                                        if (showConfirm) Icons.Filled.VisibilityOff
-                                        else Icons.Filled.Visibility,
-                                        null,
-                                        tint = MutedForeground,
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                }
                             }
                         },
                         visualTransformation = if (showConfirm) VisualTransformation.None
                         else PasswordVisualTransformation(),
-                        enabled = !isLoading,
-                        errorMessage = confirmPasswordError,
-                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onDone = { focusManager.clearFocus() }
-                        ),
                     )
 
                     Spacer(Modifier.height(16.dp))
@@ -1204,7 +991,6 @@ fun RegisterScreen(
                     // ── Register Button ───────────────────────
                     Button(
                         onClick = {
-                            attemptedSubmit = true
                             val validationError = validate()
                             if (validationError != null) {
                                 error = validationError
@@ -1214,8 +1000,8 @@ fun RegisterScreen(
                             error = ""
                             viewModel.register(
                                 name.trim(),
-                                email.trim(),
-                                phone.trim(),
+                                email,
+                                phone,
                                 password
                             ) { ok, msg ->
                                 isLoading = false

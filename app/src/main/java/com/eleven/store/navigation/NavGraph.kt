@@ -106,9 +106,13 @@ fun ElevenNavGraph(
             HomeScreen(
                 viewModel = viewModel,
                 onProductClick = { navController.navigate(Route.productDetail(it)) },
-                onCategoryClick = { navController.navigate("${Route.PRODUCTS}?category=$it") },
+                // ✅ إصلاح: ترميز القيمة قبل دمجها بمسار التنقل — بدون هذا، أي
+                // قيمة تحتوي مسافة أو رمز &/#/% تكسر تحليل معاملات الاستعلام.
+                onCategoryClick = {
+                    navController.navigate("${Route.PRODUCTS}?category=${android.net.Uri.encode(it)}")
+                },
                 onViewAllClick = { filter ->
-                    navController.navigate("${Route.PRODUCTS}?filter=$filter")
+                    navController.navigate("${Route.PRODUCTS}?filter=${android.net.Uri.encode(filter)}")
                 },
             )
         }
@@ -169,7 +173,14 @@ fun ElevenNavGraph(
             // نجلب المنتج ونبني CartItem هنا ونمرره لـ CheckoutScreen
             val product by viewModel.selectedProduct.collectAsStateWithLifecycle()
             val isLoadingProduct by viewModel.isProductLoading.collectAsStateWithLifecycle()
-            androidx.compose.runtime.LaunchedEffect(productId) { viewModel.loadProduct(productId) }
+            // ✅ إصلاح: لا نعيد تحميل المنتج من الشبكة لو كان محمَّلاً أصلاً بنفس
+            // المعرّف (المستخدم قادم للتو من صفحة تفاصيل نفس المنتج مثلاً) —
+            // كان يُعاد التحميل دائماً حتى لو كانت البيانات جاهزة في selectedProduct.
+            androidx.compose.runtime.LaunchedEffect(productId) {
+                if (viewModel.selectedProduct.value?.id != productId) {
+                    viewModel.loadProduct(productId)
+                }
+            }
             val p = product
             if (isLoadingProduct) {
                 Scaffold(

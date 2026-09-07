@@ -858,6 +858,7 @@ private fun ConfirmationStepContent(
                             model = item.image,
                             contentDescription = item.name,
                             contentScale = ContentScale.Crop,
+                            error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(8.dp))

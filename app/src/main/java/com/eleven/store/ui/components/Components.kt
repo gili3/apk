@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -17,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -86,10 +88,15 @@ fun ProductCard(
                     .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant) // bg-secondary/20
             ) {
+                // ✅ إصلاح: صورة Placeholder صريحة أثناء التحميل وعند فشل جلب
+                // الصورة، بدل مربع فارغ صامت لا يوضّح للمستخدم إن كانت الصورة
+                // لا تزال تُحمَّل أو تعذّر تحميلها فعلاً.
                 AsyncImage(
                     model = product.mainImage,
                     contentDescription = product.name,
                     contentScale = ContentScale.Crop,
+                    placeholder = rememberVectorPainter(Icons.Filled.Image),
+                    error = rememberVectorPainter(Icons.Filled.Image),
                     modifier = Modifier.fillMaxSize()
                 )
                 // شارة واحدة فقط: خصم، أو "مميز" إذا لا يوجد خصم — top-2 right-2

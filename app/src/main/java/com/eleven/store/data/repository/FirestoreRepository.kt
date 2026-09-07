@@ -437,10 +437,18 @@ class FirestoreRepository {
     // ─── Cart ───────────────────────────────────────────────────
     // ✅ مطابق تماماً لـ getCart بالموقع: يجلب أحدث مخزون لكل منتج في السلة، ويحذف تلقائياً
     // أي عنصر أصبح منتجه غير نشط أو نفدت كميته بالكامل
-    fun observeCart(): Flow<List<CartItem>> = callbackFlow {
+    // ✅ إصلاح: onError يُبلَّغ للمستدعي (نفس نمط observeNotifications) — بدونه
+    // كان أي خطأ (صلاحيات، فهرس مفقود، انقطاع اتصال لحظي) يُعامَل كـ"سلة فارغة"
+    // بصمت، فيختفي زر "إتمام الشراء" رغم أن السلة تحتوي عناصر فعلياً.
+    fun observeCart(onError: (Throwable) -> Unit = {}): Flow<List<CartItem>> = callbackFlow {
         val u = uid ?: run { trySend(emptyList()); awaitClose {}; return@callbackFlow }
         val cartCollection = db.collection("users").document(u).collection("cart")
-        val listener = cartCollection.addSnapshotListener { snap, _ ->
+        val listener = cartCollection.addSnapshotListener { snap, error ->
+            if (error != null) {
+                Log.e("FirestoreRepo", "observeCart failed: ${error.message}", error)
+                onError(error)
+                return@addSnapshotListener
+            }
             val rawItems = snap?.documents?.mapNotNull { doc ->
                 doc.toObject(CartItem::class.java)?.copy(id = doc.id)
             } ?: emptyList()
@@ -549,10 +557,17 @@ class FirestoreRepository {
     }
 
     // ─── Favorites ──────────────────────────────────────────────
-    fun observeFavorites(): Flow<List<String>> = callbackFlow {
+    // ✅ إصلاح: نفس نمط observeNotifications/observeCart — خطأ لحظي (اتصال
+    // متقطّع مثلاً) لم يعد يُعامَل كـ"لا توجد مفضّلة"، بل يُبلَّغ للمستدعي.
+    fun observeFavorites(onError: (Throwable) -> Unit = {}): Flow<List<String>> = callbackFlow {
         val u = uid ?: run { trySend(emptyList()); awaitClose {}; return@callbackFlow }
         val listener = db.collection("users").document(u).collection("favorites")
-            .addSnapshotListener { snap, _ ->
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    Log.e("FirestoreRepo", "observeFavorites failed: ${error.message}", error)
+                    onError(error)
+                    return@addSnapshotListener
+                }
                 trySend(snap?.documents?.map { it.id } ?: emptyList())
             }
         awaitClose { listener.remove() }
@@ -602,8 +617,12 @@ class FirestoreRepository {
             }
             result
         } catch (e: Exception) {
+            // ✅ إصلاح: كانت تُرجع emptyList() هنا فتُعامَل كـ"لا توجد مفضلة"
+            // بصمت — بينما FavoritesScreen تعتمد على هذه الدالة تحديداً (وليس
+            // observeFavorites) لعرض قائمة المنتجات الفعلية. رفع الاستثناء
+            // للمستدعي يسمح له بالتفريق بين "فارغة فعلاً" و"فشل التحميل".
             Log.e("FirestoreRepo", "getFavoriteProducts failed: ${e.message}", e)
-            emptyList()
+            throw e
         }
     }
 

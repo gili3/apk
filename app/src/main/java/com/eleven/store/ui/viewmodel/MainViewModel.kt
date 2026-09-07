@@ -147,8 +147,25 @@ class MainViewModel : ViewModel() {
     val isProductLoading: StateFlow<Boolean> = _isProductLoading
 
     // ─── Cart ───────────────────────────────────────────────────
-    val cartItems: StateFlow<List<CartItem>> = repo.observeCart()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    // ✅ إصلاح: onError يُبلَّغ هنا (نفس نمط الإشعارات) بدل أن يُعامَل أي خطأ
+    // لحظي بمستمع Firestore كـ"سلة فارغة" صامتة — بدونه يختفي زر "إتمام
+    // الشراء" فجأة عند أي انقطاع اتصال قصير، رغم أن السلة تحتوي عناصر فعلياً.
+    // _cartRetryTrigger يسمح بإعادة فتح مستمع جديد فعلياً عند "إعادة المحاولة"
+    // (وليس فقط مسح رسالة الخطأ)، لأن بعض الأخطاء (صلاحيات مثلاً) توقف
+    // المستمع القديم نهائياً ولا يكفي انتظار عودة الاتصال وحده.
+    private val _cartError = MutableStateFlow<String?>(null)
+    val cartError: StateFlow<String?> = _cartError
+    private val _cartRetryTrigger = MutableStateFlow(0)
+
+    val cartItems: StateFlow<List<CartItem>> = _cartRetryTrigger.flatMapLatest {
+        repo.observeCart(onError = { e -> _cartError.value = e.message ?: "تعذّر تحميل السلة" })
+            .onEach { _cartError.value = null }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun retryCart() {
+        _cartError.value = null
+        _cartRetryTrigger.value++
+    }
 
     val cartCount: StateFlow<Int> = cartItems
         .map { it.sumOf { item -> item.quantity } }
@@ -164,9 +181,22 @@ class MainViewModel : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0.0)
 
     // ─── Favorites ──────────────────────────────────────────────
-    val favoriteIds: StateFlow<Set<String>> = repo.observeFavorites()
-        .map { it.toSet() }
+    // ✅ إصلاح: نفس نمط السلة أعلاه — خطأ لحظي لم يعد يُترجَم زوراً إلى
+    // "لا توجد مفضّلة"، ومع trigger لإعادة فتح مستمع جديد فعلياً عند إعادة المحاولة.
+    private val _favoritesError = MutableStateFlow<String?>(null)
+    val favoritesError: StateFlow<String?> = _favoritesError
+    private val _favoritesRetryTrigger = MutableStateFlow(0)
+
+    val favoriteIds: StateFlow<Set<String>> = _favoritesRetryTrigger.flatMapLatest {
+        repo.observeFavorites(onError = { e -> _favoritesError.value = e.message ?: "تعذّر تحميل المفضلة" })
+            .onEach { _favoritesError.value = null }
+    }.map { it.toSet() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun retryFavorites() {
+        _favoritesError.value = null
+        _favoritesRetryTrigger.value++
+    }
 
     // ✅ جديد: بيانات منتجات المفضلة الكاملة (اسم/سعر/صورة/مخزون) مجلوبة
     // مباشرة من مستند كل منتج — تماماً مثل getFavorites بالموقع، بدل
@@ -178,6 +208,12 @@ class MainViewModel : ViewModel() {
     private val _favoritesLoading = MutableStateFlow(false)
     val favoritesLoading: StateFlow<Boolean> = _favoritesLoading
 
+    // ✅ إصلاح: getFavoriteProducts() صارت ترفع الاستثناء بدل ابتلاعه (انظر
+    // FirestoreRepository) — لازم نمسكه هنا ونميّزه، بدل انهيار كامل للتطبيق
+    // أو (كما كان سابقاً) إظهار "لا توجد مفضلة" وهمية عند أي خطأ شبكة.
+    private val _favoriteProductsError = MutableStateFlow<String?>(null)
+    val favoriteProductsError: StateFlow<String?> = _favoriteProductsError
+
     init {
         viewModelScope.launch {
             favoriteIds.collect { loadFavoriteProducts() }
@@ -187,8 +223,14 @@ class MainViewModel : ViewModel() {
     fun loadFavoriteProducts() {
         viewModelScope.launch {
             _favoritesLoading.value = true
-            try { _favoriteProducts.value = repo.getFavoriteProducts() }
-            finally { _favoritesLoading.value = false }
+            _favoriteProductsError.value = null
+            try {
+                _favoriteProducts.value = repo.getFavoriteProducts()
+            } catch (e: Exception) {
+                _favoriteProductsError.value = e.message ?: "تعذّر تحميل المفضلة"
+            } finally {
+                _favoritesLoading.value = false
+            }
         }
     }
 
@@ -291,6 +333,11 @@ class MainViewModel : ViewModel() {
                     searchQuery  = searchQuery,
                 ).filter { it.stock > 0 }
                 _error.value = repo.lastProductsError
+            } catch (e: Exception) {
+                // ✅ إجراء دفاعي: repo.getProducts() محميّة داخلياً حالياً بالكامل
+                // ولا ترفع استثناءً فعلياً، لكن أي تعديل مستقبلي لا يلتزم بنفس
+                // الانضباط سيسبب انهياراً كاملاً غير متوقَّع بدل رسالة خطأ لطيفة.
+                _error.value = e.message ?: "تعذّر تحميل المنتجات"
             } finally {
                 _isLoading.value = false
             }

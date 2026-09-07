@@ -10,7 +10,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,19 +57,26 @@ fun ProductsScreen(
     val products by viewModel.allProducts.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // ✅ إصلاح: نميّز فشل التحميل الفعلي (شبكة/سيرفر) عن "لا توجد منتجات فعلاً"
+    val loadError by viewModel.error.collectAsStateWithLifecycle()
 
     // ── حالة الفلاتر — مطابق للموقع ─────────────────────────────
-    var selectedCategory by remember {
+    // ✅ إصلاح: rememberSaveable(initialCategory/initialFilter) بدل remember
+    // العادي — لو انتقل المستخدم من فئة لأخرى بدون إعادة إنشاء الشاشة (نفس
+    // الوجهة بمعاملات مختلفة)، تتزامن الحالة تلقائياً مع المعامل الجديد
+    // بدل أن تبقى عالقة على القيمة الأولى.
+    var selectedCategory by rememberSaveable(initialCategory) {
         mutableStateOf(if (initialCategory.isNotBlank()) initialCategory else "all")
     }
-    var filterType by remember {
+    var filterType by rememberSaveable(initialFilter) {
         mutableStateOf(if (initialFilter.isNotBlank()) initialFilter else "all")
     }
-    var selectedBrand by remember { mutableStateOf("all") }
-    var searchQuery by remember { mutableStateOf(initialSearch) }
+    var selectedBrand by rememberSaveable(initialFilter) { mutableStateOf("all") }
+    var searchQuery by rememberSaveable(initialSearch) { mutableStateOf(initialSearch) }
 
-    // تحميل المنتجات عند تغيّر الفلاتر
-    LaunchedEffect(selectedCategory, filterType, selectedBrand, searchQuery) {
+    // ✅ دالة إعادة تحميل موحّدة — تُستخدم في LaunchedEffect وأيضاً بزر
+    // "إعادة المحاولة" عند فشل التحميل، بدل تكرار نفس المعاملات مرتين
+    val reloadProducts: () -> Unit = {
         viewModel.loadProducts(
             categoryId = selectedCategory.takeIf { it != "all" },
             isFeatured = if (filterType == "featured") true else null,
@@ -78,12 +88,40 @@ fun ProductsScreen(
         )
     }
 
+    // تحميل المنتجات عند تغيّر الفلاتر
+    LaunchedEffect(selectedCategory, filterType, selectedBrand, searchQuery) {
+        reloadProducts()
+    }
+
     Scaffold(
         topBar = {
             Column(
                 modifier = Modifier.background(MaterialTheme.colorScheme.background)
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
+
+                // ✅ إصلاح: زر رجوع صريح — كانت الشاشة تعتمد فقط على زر
+                // النظام أو التبويب السفلي، فمستخدم داخل من "عرض المزيد"
+                // لا يجد سهم رجوع متوقَّعاً أعلى الشاشة.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "رجوع",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    Text(
+                        "المنتجات",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                    )
+                }
 
                 // ── الفلاتر — مطابقة للموقع: sticky top-0 z-10 bg-background/95 ──
                 Surface(
@@ -408,6 +446,44 @@ fun ProductsScreen(
                     }
                 }
 
+                // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "لا توجد نتائج" ──
+                loadError != null -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.CloudOff,
+                            contentDescription = null,
+                            tint = MutedForeground,
+                            modifier = Modifier.size(56.dp),
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "تعذّر تحميل المنتجات",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                            color = MutedForeground,
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = { reloadProducts() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                        ) {
+                            Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 // ── لا توجد منتجات ────────────────────────────────
                 products.isEmpty() -> {
                     Column(
@@ -519,6 +595,8 @@ private fun ProductsScreenProductCard(
                     model = imageSrc,
                     contentDescription = product.name,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                     modifier = Modifier.fillMaxSize(),
                 )
 

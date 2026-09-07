@@ -775,6 +775,8 @@ private fun FavoriteProductItem(
                     model = product.mainImage,
                     contentDescription = product.name,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(180.dp)
@@ -858,6 +860,7 @@ fun FavoritesScreen(
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val favProducts by viewModel.favoriteProducts.collectAsStateWithLifecycle()
     val isLoading by viewModel.favoritesLoading.collectAsStateWithLifecycle()
+    val loadError by viewModel.favoriteProductsError.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -905,6 +908,46 @@ fun FavoritesScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.size(48.dp))
+            }
+        } else if (loadError != null && favProducts.isEmpty()) {
+            // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "لا توجد مفضلة فعلاً" ──
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.CloudOff,
+                        contentDescription = null,
+                        tint = MutedForeground,
+                        modifier = Modifier.size(56.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "تعذّر تحميل المفضلة",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { viewModel.loadFavoriteProducts() },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                    ) {
+                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         } else if (favProducts.isEmpty()) {
             // ── حالة فارغة ──

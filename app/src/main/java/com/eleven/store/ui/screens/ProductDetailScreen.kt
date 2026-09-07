@@ -344,6 +344,8 @@ fun ProductDetailScreen(
                                         model = images[page],
                                         contentDescription = p.name,
                                         contentScale = ContentScale.Crop,
+                                        placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                                        error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
@@ -383,6 +385,7 @@ fun ProductDetailScreen(
                                                 model = images[i],
                                                 contentDescription = null,
                                                 contentScale = ContentScale.Crop,
+                                                error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                                                 modifier = Modifier
                                                     .fillMaxSize()
                                                     .clip(RoundedCornerShape(8.dp)),

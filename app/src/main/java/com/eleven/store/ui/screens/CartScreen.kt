@@ -69,6 +69,7 @@ fun CartScreen(
     onProductClick: (String) -> Unit,
 ) {
     val cartItems by viewModel.cartItems.collectAsStateWithLifecycle()
+    val cartError by viewModel.cartError.collectAsStateWithLifecycle()
     val cartTotal by viewModel.cartTotal.collectAsStateWithLifecycle()
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -366,7 +367,49 @@ fun CartScreen(
             }
         }
     ) { padding ->
-        if (cartItems.isEmpty()) {
+        if (cartError != null && cartItems.isEmpty()) {
+            // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "السلة فارغة فعلاً" ──
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.CloudOff,
+                        contentDescription = null,
+                        tint = MutedForeground,
+                        modifier = Modifier.size(56.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "تعذّر تحميل السلة",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { viewModel.retryCart() },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                    ) {
+                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else if (cartItems.isEmpty()) {
             // ── حالة السلة الفارغة — مطابقة للموقع ──
             Box(
                 modifier = Modifier
@@ -529,6 +572,7 @@ private fun CartItemRow(
                     model = item.image,
                     contentDescription = item.name,
                     contentScale = ContentScale.Crop,
+                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                     modifier = Modifier.fillMaxSize(),
                 )
             }

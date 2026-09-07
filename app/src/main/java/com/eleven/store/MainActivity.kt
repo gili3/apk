@@ -58,6 +58,7 @@ import com.eleven.store.navigation.Route
 import com.eleven.store.ui.icons.LucideIcons
 import com.eleven.store.ui.theme.*
 import com.eleven.store.ui.viewmodel.MainViewModel
+import com.eleven.store.util.NoInternetBanner
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -174,7 +175,9 @@ fun ElevenApp(
                     onCartClick = { navController.navigate(Route.CART) },
                     onNotificationsClick = { navController.navigate(Route.NOTIFICATIONS) },
                     onSearchSubmit = { query ->
-                        navController.navigate("${Route.PRODUCTS}?search=$query")
+                        // ✅ إصلاح: ترميز نص البحث قبل دمجه بمسار التنقل يدوياً —
+                        // بحث يحتوي مسافة أو رمز &/#/% كان يكسر تحليل الاستعلام.
+                        navController.navigate("${Route.PRODUCTS}?search=${android.net.Uri.encode(query)}")
                     },
                 )
             },
@@ -186,11 +189,16 @@ fun ElevenApp(
             },
             containerColor = Background,
         ) { innerPadding ->
-            Box(modifier = Modifier.padding(innerPadding)) {
-                ElevenNavGraph(
-                    navController = navController,
-                    viewModel = viewModel,
-                )
+            Column(modifier = Modifier.padding(innerPadding)) {
+                // ✅ إصلاح: بانر عام يظهر تلقائياً عند فقدان الاتصال ويختفي فور
+                // عودته — مصدر واحد فوق كل الشجرة بدل أن تكتشف كل شاشة الحالة بنفسها.
+                NoInternetBanner()
+                Box(modifier = Modifier.weight(1f)) {
+                    ElevenNavGraph(
+                        navController = navController,
+                        viewModel = viewModel,
+                    )
+                }
             }
         }
     }
@@ -225,7 +233,14 @@ fun ElevenHeader(
 
     // إخفاء الهيدر في شاشات معينة
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-    val hideRoutes = listOf(Route.LOGIN, Route.REGISTER)
+    // ✅ إصلاح: كل شاشة تملك ElevenTopBar خاصاً بها (سهم رجوع + عنوان) كانت
+    // تُعرض تحت الهيدر العام مباشرة — شريطان علويان متتاليان يهدران مساحة
+    // ويُلبسان زر الرجوع الحقيقي وسط أيقونات مشابهة (القائمة). نوسّع القائمة
+    // لتغطي كل الشاشات التي تستخدم ElevenTopBar بدل الاقتصار على product/ وorder/.
+    val hideRoutes = listOf(
+        Route.LOGIN, Route.REGISTER, Route.SETTINGS, Route.NOTIFICATIONS,
+        Route.ORDERS, Route.CHECKOUT, Route.ABOUT, Route.CONTACT, Route.CART,
+    )
     val hidePatterns = listOf("product/", "order/")
     if (hideRoutes.any { currentRoute == it }) return
     if (hidePatterns.any { currentRoute?.startsWith(it) == true }) return
@@ -490,6 +505,20 @@ fun ElevenBottomNav(
 
     val unselectedColor = MutedForeground
 
+    // ✅ إصلاح: حارس debounce بسيط — يتجاهل أي نقر خلال ~300ms من آخر تنقل،
+    // لمنع دفع أكثر من وجهة متتالية للـBack Stack عند نقر سريع متكرر.
+    var lastNavTimestamp by remember { mutableStateOf(0L) }
+    fun navigateDebounced(route: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastNavTimestamp < 300L) return
+        lastNavTimestamp = now
+        navController.navigate(route) {
+            popUpTo(Route.HOME) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
     Surface(
         shadowElevation = 8.dp,
         color = Color.White,
@@ -527,11 +556,7 @@ fun ElevenBottomNav(
                         selected = selected,
                         onClick = {
                             if (!selected) {
-                                navController.navigate(item.route) {
-                                    popUpTo(Route.HOME) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
+                                navigateDebounced(item.route)
                             }
                         },
                         icon = {
@@ -594,6 +619,21 @@ fun ElevenDrawer(
 ) {
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val drawerWidth = if (screenWidthDp < 640) screenWidthDp.dp else 320.dp
+
+    // ✅ نفس حارس الـdebounce المستخدم بالشريط السفلي — يمنع نقر متكرر سريع
+    // على روابط القائمة الجانبية من دفع أكثر من وجهة متتالية للـBack Stack.
+    var lastDrawerNavTimestamp by remember { mutableStateOf(0L) }
+    fun navigateDebounced(route: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastDrawerNavTimestamp < 300L) return
+        lastDrawerNavTimestamp = now
+        navController.navigate(route) {
+            popUpTo(Route.HOME) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+        onClose()
+    }
 
     ModalDrawerSheet(
         modifier = Modifier.width(drawerWidth),
@@ -675,12 +715,7 @@ fun ElevenDrawer(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .clickable {
-                                navController.navigate(route) {
-                                    popUpTo(Route.HOME) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                                onClose()
+                                navigateDebounced(route)
                             }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,

@@ -241,6 +241,8 @@ fun AboutScreen(
                             model = storeAboutImage,
                             contentDescription = storeName,
                             contentScale = ContentScale.Crop,
+                            placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                            error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

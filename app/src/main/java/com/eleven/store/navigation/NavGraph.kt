@@ -1,5 +1,6 @@
 package com.eleven.store.navigation
 
+import android.content.Intent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -103,6 +104,7 @@ fun ElevenNavGraph(
         },
     ) {
         composable(Route.HOME) {
+            val context = androidx.compose.ui.platform.LocalContext.current
             HomeScreen(
                 viewModel = viewModel,
                 onProductClick = { navController.navigate(Route.productDetail(it)) },
@@ -113,6 +115,34 @@ fun ElevenNavGraph(
                 },
                 onViewAllClick = { filter ->
                     navController.navigate("${Route.PRODUCTS}?filter=${android.net.Uri.encode(filter)}")
+                },
+                // ✅ جديد: فكّ رابط البانر (banner.link من لوحة التحكم) — رابط
+                // خارجي كامل (http/https) يُفتح بمتصفح خارجي، وأي شيء آخر
+                // يُعامَل كمسار داخلي للتطبيق (بعد إزالة الشرطة الأولى إن
+                // وُجدت، بنفس تحويل actionRoute بالإشعارات) فيُفتح مباشرة
+                // بنفس شاشات المنتج/التصنيف/إلخ دون أي خطوة إضافية.
+                onOpenLink = { link ->
+                    if (link.startsWith("http://") || link.startsWith("https://")) {
+                        try {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link))
+                            )
+                        } catch (_: Exception) {
+                            // رابط خارجي غير صالح/بلا تطبيق يفتحه — نتجاهل بأمان
+                            // بدل تعطّل التطبيق.
+                        }
+                    } else {
+                        val route = link.removePrefix("/")
+                        if (route.isNotBlank()) {
+                            try {
+                                navController.navigate(route)
+                            } catch (_: Exception) {
+                                // مسار غير معروف بالتطبيق (مثال: رابط يخص الموقع فقط
+                                // وليس له مقابل بالتطبيق) — نتجاهل بأمان بدل تعطّل
+                                // التطبيق بالكامل بسبب رابط أدخله الأدمن بالخطأ.
+                            }
+                        }
+                    }
                 },
             )
         }

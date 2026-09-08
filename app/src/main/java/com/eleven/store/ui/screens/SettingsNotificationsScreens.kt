@@ -1212,7 +1212,12 @@ fun NotificationsScreen(
                                 }
                                 // فتح المسار المرتبط بالإشعار (مثال: تفاصيل الطلب) إن وُجد —
                                 // نفس السلوك الذي يفتحه الضغط على إشعار النظام من قائمة التنبيهات.
-                                notif.actionRoute.takeIf { it.isNotBlank() }?.let(onOpenRoute)
+                                // ✅ إصلاح: actionRoute مخزَّن بالسيرفر بشرطة بداية ("/order/xyz")
+                                // بينما مسارات NavGraph بدون شرطة بداية ("order/{orderId}") —
+                                // بدون إزالتها هنا كان التنقل يفشل بصمت (لا يحدث شيء عند الضغط)،
+                                // رغم أن نفس المسار يعمل من تنبيه النظام لأن
+                                // ElevenFirebaseMessagingService يزيل الشرطة هناك فقط.
+                                notif.actionRoute.removePrefix("/").takeIf { it.isNotBlank() }?.let(onOpenRoute)
                             },
                             onDelete = {
                                 viewModel.deleteNotification(notif.id)

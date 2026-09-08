@@ -61,6 +61,11 @@ fun HomeScreen(
     onProductClick: (String) -> Unit,
     onCategoryClick: (String) -> Unit,
     onViewAllClick: (String) -> Unit,
+    // ✅ جديد: يُستدعى عند الضغط على بانر/زر بانر يحمل رابطاً (banner.link)
+    // — مسار داخلي مثل "/product/xxx" أو "/category/xxx"، أو رابط خارجي كامل
+    // (https://...). المنطق الفعلي لفكّ هذا الرابط (تنقّل داخلي أو فتح متصفح)
+    // موجود بـNavGraph.kt حيث تتوفر navController وcontext معاً.
+    onOpenLink: (String) -> Unit = {},
 ) {
     val banners by viewModel.banners.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
@@ -133,6 +138,11 @@ fun HomeScreen(
                 banners = banners,
                 isLoading = isLoading,
                 onShopClick = { onViewAllClick("") },
+                // ✅ إصلاح: كان زر/بانر البانر يتجاهل banner.link تماماً ويذهب
+                // دائماً لصفحة كل المنتجات، حتى لو كان الأدمن قد حدّد رابط منتج
+                // أو صفحة معيّنة من لوحة التحكم — فيبدو للمستخدم وكأن "الرابط
+                // لا يفتح". الآن: رابط محدَّد → onOpenLink، وإلا → onShopClick.
+                onBannerLinkClick = { link -> onOpenLink(link) },
             )
         }
 
@@ -228,6 +238,7 @@ private fun BannerSlider(
     banners: List<Banner>,
     isLoading: Boolean,
     onShopClick: () -> Unit,
+    onBannerLinkClick: (String) -> Unit = {},
 ) {
     val shape = RoundedCornerShape(16.dp)
 
@@ -324,7 +335,17 @@ private fun BannerSlider(
                     modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     val b = banners[page]
-                    Box(Modifier.fillMaxSize()) {
+                    // ✅ إصلاح: رابط البانر (إن وُجد) هو الوجهة الفعلية عند
+                    // الضغط — سواء بالضغط على الصورة نفسها أو زر الـCTA؛ يذهب
+                    // لصفحة كل المنتجات فقط إن كان البانر بلا رابط محدَّد أصلاً.
+                    val onTap: () -> Unit = {
+                        if (b.link.isNotBlank()) onBannerLinkClick(b.link) else onShopClick()
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable(onClick = onTap)
+                    ) {
                         // صورة البانر
                         if (b.image.isNotBlank()) {
                             AsyncImage(
@@ -384,7 +405,7 @@ private fun BannerSlider(
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Button(
-                                    onClick = onShopClick,
+                                    onClick = onTap,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = Accent,
                                         contentColor = Color.White,

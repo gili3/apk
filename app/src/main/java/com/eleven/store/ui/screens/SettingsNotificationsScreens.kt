@@ -57,6 +57,10 @@ fun SettingsScreen(
         storeSettings.websiteUrl.ifBlank { "https://eleven-sd.com" }.trimEnd('/')
     }
 
+    // ✅ إصلاح: تسجيل الخروج كان يحدث فوراً بلا أي تأكيد — ضغطة واحدة بالخطأ
+    // (خصوصاً أن الزر أحمر ومجاور لعناصر أخرى بنفس الصفحة) كانت تُخرج
+    // المستخدم من حسابه مباشرة بلا أي فرصة للتراجع.
+    var showLogoutConfirm by remember { mutableStateOf(false) }
     var showChangePassword by remember { mutableStateOf(false) }
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
@@ -509,6 +513,60 @@ fun SettingsScreen(
             }
 
             // ════════════════════════════════════════════
+            //  ✅ جديد: تنبيه تأكيد البريد الإلكتروني — يظهر فقط لحسابات
+            //  بريد/كلمة مرور (حسابات Google مؤكَّدة أصلاً من طرف Google)
+            //  لم تُؤكَّد بعد. غير مانع لاستخدام التطبيق، فقط تذكير مع زر
+            //  لإعادة إرسال رابط التأكيد.
+            // ════════════════════════════════════════════
+            val isPasswordAccount = user?.providerData?.any { it.providerId == "password" } == true
+            if (user != null && isPasswordAccount && user?.isEmailVerified == false) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        ),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(Icons.Filled.Email, null, tint = Accent, modifier = Modifier.size(20.dp))
+                                Text(
+                                    "بريدك الإلكتروني غير مؤكَّد",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                )
+                            }
+                            Text(
+                                "تحقق من صندوق بريدك واضغط رابط التأكيد الذي أرسلناه لك.",
+                                fontSize = 13.sp,
+                                color = MutedForeground,
+                            )
+                            TextButton(
+                                onClick = {
+                                    viewModel.resendEmailVerification { ok, msg ->
+                                        scope.launch {
+                                            if (ok) snackbarHostState.showMessage("تم إرسال رابط التأكيد إلى بريدك الإلكتروني", SnackbarType.SUCCESS)
+                                            else snackbarHostState.showMessage(msg ?: "تعذّر إرسال رابط التأكيد", SnackbarType.ERROR)
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(0.dp),
+                            ) {
+                                Text("إعادة إرسال رابط التأكيد", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ════════════════════════════════════════════
             //  بطاقة القانونية
             // ════════════════════════════════════════════
             item {
@@ -622,7 +680,7 @@ fun SettingsScreen(
             // ════════════════════════════════════════════
             item {
                 OutlinedButton(
-                    onClick = { viewModel.logout() },
+                    onClick = { showLogoutConfirm = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp),
@@ -662,6 +720,26 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    // ✅ إصلاح: تأكيد قبل تسجيل الخروج فعلياً — يمنع خروجاً غير مقصود بضغطة واحدة.
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("تسجيل الخروج", fontWeight = FontWeight.Bold) },
+            text = { Text("هل أنت متأكد أنك تريد تسجيل الخروج من حسابك؟", fontSize = 14.sp, color = MutedForeground) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutConfirm = false
+                    viewModel.logout()
+                }) {
+                    Text("تسجيل الخروج", color = Destructive, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("إلغاء") }
+            },
+        )
     }
 
     // ✅ نافذة تأكيد حذف الحساب — تطلب كلمة المرور الحالية لحسابات

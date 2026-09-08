@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.eleven.store.data.model.*
+import com.eleven.store.data.repository.EmailNotVerifiedException
 import com.eleven.store.data.repository.FirestoreRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
@@ -37,6 +38,9 @@ class MainViewModel : ViewModel() {
     fun login(email: String, password: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.loginWithEmail(email, password); repo.syncFcmToken(); onResult(true, null) }
+            catch (e: EmailNotVerifiedException) {
+                onResult(false, "لم يتم تأكيد بريدك الإلكتروني بعد. أرسلنا رابط تأكيد جديد إلى بريدك، افتحه ثم سجّل الدخول مرة أخرى.")
+            }
             catch (e: Exception) { onResult(false, mapAuthError(e, "فشل تسجيل الدخول")) }
         }
     }
@@ -64,10 +68,21 @@ class MainViewModel : ViewModel() {
 
     fun isCurrentUserGoogleAccount(): Boolean = repo.isCurrentUserGoogleAccount()
 
+    // ✅ إصلاح: registerWithEmail تُسجّل الخروج تلقائياً بعد إنشاء الحساب
+    // (التحقق أصبح إجبارياً)، فاستدعاء syncFcmToken بعدها كان سيفشل بصمت
+    // لعدم وجود مستخدم مسجَّل دخول فعلياً.
     fun register(name: String, email: String, phone: String, password: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
-            try { repo.registerWithEmail(name, email, phone, password); repo.syncFcmToken(); onResult(true, null) }
+            try { repo.registerWithEmail(name, email, phone, password); onResult(true, null) }
             catch (e: Exception) { onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى")) }
+        }
+    }
+
+    // ✅ جديد: إعادة إرسال رابط تأكيد البريد الإلكتروني من شاشة الإعدادات
+    fun resendEmailVerification(onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.resendEmailVerification(); onResult(true, null) }
+            catch (e: Exception) { onResult(false, "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
         }
     }
 

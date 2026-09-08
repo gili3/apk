@@ -364,9 +364,14 @@ private fun AuthTextField(
             leadingIcon = leadingIcon,
             trailingIcon = trailingIcon,
             visualTransformation = visualTransformation,
+            // ✅ إصلاح: ارتفاع ثابت 44dp كان أقل من الحد الأدنى الذي يحتاجه
+            // OutlinedTextField بحشوته الداخلية الافتراضية بـMaterial3، فكان
+            // نص المستخدم (والـ placeholder) يُقصّ رأسياً ويظهر نصفه فقط.
+            // heightIn(min) يسمح للحقل بأخذ الارتفاع الطبيعي الكافي دون قصّ،
+            // بدل فرض قيمة أصغر من اللازم.
             modifier = Modifier
                 .fillMaxWidth()
-                .height(44.dp),
+                .heightIn(min = 56.dp),
             singleLine = singleLine,
             enabled = enabled,
             isError = errorMessage != null,
@@ -550,24 +555,9 @@ fun LoginScreen(
                     Spacer(Modifier.height(20.dp))
 
                     // ── Password ──────────────────────────────
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FieldLabel("كلمة المرور", required = true)
-                        TextButton(
-                            onClick = { showForgotPassword = true },
-                            contentPadding = PaddingValues(0.dp),
-                        ) {
-                            Text(
-                                "نسيت كلمة المرور؟",
-                                color = Accent,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
+                    // ✅ نُقل رابط "نسيت كلمة المرور؟" من هنا إلى أسفل زر تسجيل
+                    // الدخول بناءً على طلب مباشر — كان بجانب تسمية الحقل سابقاً.
+                    FieldLabel("كلمة المرور", required = true)
                     Spacer(Modifier.height(8.dp))
                     AuthTextField(
                         value = password,
@@ -650,6 +640,21 @@ fun LoginScreen(
                         }
                     }
 
+                    // ── نسيت كلمة المرور؟ ──────────────────────
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        TextButton(onClick = { showForgotPassword = true }) {
+                            Text(
+                                "نسيت كلمة المرور؟",
+                                color = Accent,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+
                     // ── Or Divider ────────────────────────────
                     OrDivider()
 
@@ -658,7 +663,15 @@ fun LoginScreen(
                         text = "تسجيل الدخول عبر Google",
                         enabled = !isLoading,
                         onClick = {
-                            googleLauncher.launch(googleClient.signInIntent)
+                            // ✅ إصلاح: GoogleSignInClient يحتفظ بآخر حساب مُستخدَم ويعيد
+                            // استخدامه بصمت بدون عرض قائمة اختيار الحساب — حتى لو المستخدم
+                            // سجّل خروجه من التطبيق (signOut هنا هو Firebase Auth فقط، لا
+                            // يمسح ذاكرة GoogleSignInClient نفسه). نستدعي signOut() على
+                            // عميل جوجل تحديداً قبل كل محاولة دخول لإجباره على نسيان الحساب
+                            // المخزَّن وعرض كل الحسابات المتاحة على الجهاز من جديد.
+                            googleClient.signOut().addOnCompleteListener {
+                                googleLauncher.launch(googleClient.signInIntent)
+                            }
                         },
                     )
 
@@ -831,6 +844,82 @@ private fun ForgotPasswordContent(
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  VERIFY EMAIL SENT — تظهر بعد إنشاء الحساب مباشرة (التحقق إجباري
+//  الآن، فالحساب الجديد لا يُبقي المستخدم مسجّل دخول). إعادة الإرسال
+//  تحدث تلقائياً بمجرد أي محاولة دخول لاحقة قبل التأكيد (راجع
+//  loginWithEmail في FirestoreRepository)، فلا حاجة لزر إعادة إرسال
+//  مستقل هنا يتطلب مستخدماً مسجّل دخول أصلاً (وهو غير متاح بهذه الحالة).
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+private fun VerifyEmailSentContent(
+    email: String,
+    viewModel: MainViewModel,
+    onGoToLogin: () -> Unit,
+) {
+    Scaffold(
+        topBar = { ElevenTopBar(title = "تأكيد البريد الإلكتروني") }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(MaterialTheme.colorScheme.background)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                AuthCard {
+                    AuthLogo()
+                    Spacer(Modifier.height(24.dp))
+                    Icon(
+                        Icons.Filled.MarkEmailRead,
+                        null,
+                        tint = Accent,
+                        modifier = Modifier.size(48.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "تحقق من بريدك الإلكتروني",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 24.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "أرسلنا رابط تأكيد إلى${if (email.isNotBlank()) " $email" else " بريدك الإلكتروني"}. افتح الرابط لتأكيد حسابك، ثم سجّل الدخول.",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    Spacer(Modifier.height(28.dp))
+
+                    Button(
+                        onClick = onGoToLogin,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Accent,
+                            contentColor = Color.White,
+                        ),
+                    ) {
+                        Text("الذهاب لتسجيل الدخول", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  REGISTER SCREEN — نسخة طبق الأصل من Register.tsx
 // ═══════════════════════════════════════════════════════════════
 
@@ -852,6 +941,10 @@ fun RegisterScreen(
     var showConfirm by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    // ✅ جديد: التسجيل الآن لا يُدخل المستخدم للتطبيق مباشرة (التحقق إجباري) —
+    // بعد نجاح إنشاء الحساب نعرض هذه الشاشة بدل تنفيذ onRegisterSuccess فوراً.
+    var showVerifyEmailSent by remember { mutableStateOf(false) }
+    var registeredEmail by remember { mutableStateOf("") }
     // ✅ جديد: تظهر أخطاء الحقول فقط بعد أول محاولة إرسال
     var attemptedSubmit by remember { mutableStateOf(false) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -885,6 +978,16 @@ fun RegisterScreen(
         } catch (_: Exception) {
             error = "فشل التسجيل عبر Google"
         }
+    }
+
+    // ── حالة: تم إنشاء الحساب وأُرسل رابط التأكيد ──
+    if (showVerifyEmailSent) {
+        VerifyEmailSentContent(
+            email = registeredEmail,
+            viewModel = viewModel,
+            onGoToLogin = onNavigateToLogin,
+        )
+        return
     }
 
     // ✅ تحقق أدق من قواعد صيغة البريد/الهاتف، بدل isBlank فقط سابقاً
@@ -1219,8 +1322,10 @@ fun RegisterScreen(
                                 password
                             ) { ok, msg ->
                                 isLoading = false
-                                if (ok) onRegisterSuccess()
-                                else error = msg ?: "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"
+                                if (ok) {
+                                    registeredEmail = email.trim()
+                                    showVerifyEmailSent = true
+                                } else error = msg ?: "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"
                             }
                         },
                         enabled = !isLoading,
@@ -1254,7 +1359,11 @@ fun RegisterScreen(
                         text = "التسجيل عبر Google",
                         enabled = !isLoading,
                         onClick = {
-                            googleLauncher.launch(googleClient.signInIntent)
+                            // ✅ إصلاح: نفس مشكلة شاشة تسجيل الدخول — إجبار عميل جوجل على
+                            // نسيان الحساب المخزَّن قبل فتح قائمة اختيار الحساب.
+                            googleClient.signOut().addOnCompleteListener {
+                                googleLauncher.launch(googleClient.signInIntent)
+                            }
                         },
                     )
 

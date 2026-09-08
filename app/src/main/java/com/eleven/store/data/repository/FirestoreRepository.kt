@@ -16,6 +16,10 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+// ✅ جديد: يُرمى عند محاولة دخول بحساب بريد/كلمة مرور لم يؤكَّد بعد — تُستخدم
+// من MainViewModel لعرض رسالة مخصّصة بدل رسالة "فشل تسجيل الدخول" العامة.
+class EmailNotVerifiedException : Exception("email not verified")
+
 class FirestoreRepository {
 
     // ✅ v2: لم يعد التطبيق يحتاج معرّف حساب المدير إطلاقاً — إشعار "طلب
@@ -44,8 +48,24 @@ class FirestoreRepository {
         awaitClose { auth.removeAuthStateListener(listener) }
     }
 
-    suspend fun loginWithEmail(email: String, password: String) =
-        auth.signInWithEmailAndPassword(email, password).await()
+    // ✅ إصلاح: التحقق من البريد أصبح إجبارياً — لا يُسمح بالدخول بحساب
+    // بريد/كلمة مرور غير مؤكَّد. لو غير مؤكَّد: نعيد إرسال رابط تأكيد جديد
+    // (تحسباً لضياع الرابط الأول أو انتهاء صلاحيته)، نسجّل الخروج فوراً حتى
+    // لا يبقى المستخدم داخل التطبيق بجلسة غير مؤكَّدة، ثم نرمي استثناءً
+    // مخصصاً تلتقطه الواجهة لعرض رسالة واضحة بدل "فشل تسجيل الدخول" العامة.
+    suspend fun loginWithEmail(email: String, password: String) {
+        val result = auth.signInWithEmailAndPassword(email, password).await()
+        val user = result.user
+        if (user != null && !user.isEmailVerified) {
+            try {
+                user.sendEmailVerification().await()
+            } catch (e: Exception) {
+                Log.w("FirestoreRepository", "تعذّر إعادة إرسال رابط التأكيد عند محاولة الدخول", e)
+            }
+            auth.signOut()
+            throw EmailNotVerifiedException()
+        }
+    }
 
     // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
     // ثم يكتب وثيقة المستخدم في Firestore (نفس الحقول المستخدمة في الموقع)
@@ -68,7 +88,33 @@ class FirestoreRepository {
             )
         ).await()
 
+        // ✅ إصلاح: لم يكن هناك أي تأكيد بريد إلكتروني إطلاقاً بالتطبيق —
+        // أي حساب بريد/كلمة مرور يدخل مباشرة بلا أي تحقق من ملكية البريد
+        // الفعلي. نرسل رابط التحقق فور إنشاء الحساب. فشل الإرسال (مثال: تجاوز
+        // حصة Firebase اليومية) لا يجب أن يمنع إنشاء الحساب نفسه — يبقى
+        // بإمكان المستخدم طلب إعادة الإرسال لاحقاً من الإعدادات.
+        try {
+            user.sendEmailVerification().await()
+        } catch (e: Exception) {
+            Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني", e)
+        }
+
+        // ✅ إصلاح: بما أن التحقق أصبح إجبارياً، لا يجب أن يبقى الحساب الجديد
+        // مسجّل دخول تلقائياً (سلوك Firebase الافتراضي بعد createUser) بينما
+        // بريده غير مؤكَّد بعد — نسجّل الخروج فوراً، والمستخدم يدخل لاحقاً
+        // بشكل طبيعي عبر شاشة تسجيل الدخول بمجرد تأكيد البريد.
+        auth.signOut()
+
         return user
+    }
+
+    /**
+     * إعادة إرسال رابط تأكيد البريد الإلكتروني للمستخدم الحالي (يُستخدم من
+     * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة).
+     */
+    suspend fun resendEmailVerification() {
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
+        user.sendEmailVerification().await()
     }
 
     // ✅ تسجيل الدخول/التسجيل عبر Google، مطابق لسلوك الموقع (signInWithPopup + setDoc merge)

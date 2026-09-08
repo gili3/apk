@@ -340,7 +340,12 @@ class MainViewModel : ViewModel() {
                 _bestSellers.value      = bestDeferred.await().filter { it.stock > 0 }
                 _onSaleProducts.value   = onSaleDeferred.await().filter { it.stock > 0 }
             } catch (e: Exception) {
-                _error.value = e.message
+                // ✅ إصلاح: كانت e.message تُعرَض للمستخدم كما هي (نص استثناء
+                // تقني خام، وأحياناً فارغة تماماً)، بلا أي تفريق بين انقطاع
+                // الاتصال وأي فشل آخر — نفس الإصلاح المطبَّق بـ FirestoreRepository
+                // .getProducts، هنا أيضاً حتى لا تظهر شاشة رئيسية فارغة برسالة
+                // غامضة عند انقطاع الاتصال تحديداً.
+                _error.value = repo.friendlyLoadError(e)
             } finally {
                 _isLoading.value = false
             }

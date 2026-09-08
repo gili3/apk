@@ -11,10 +11,16 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 // ✅ جديد: يُرمى عند محاولة دخول بحساب بريد/كلمة مرور لم يؤكَّد بعد — تُستخدم
 // من MainViewModel لعرض رسالة مخصّصة بدل رسالة "فشل تسجيل الدخول" العامة.
@@ -38,6 +44,43 @@ class FirestoreRepository {
     private val uid get() = auth.currentUser?.uid
 
     var lastProductsError: String? = null
+
+    // ✅ إصلاح أداء: كانت السلة والمفضلة تجلبان بيانات كل منتج عبر حلقة
+    // تنتظر كل مستند بشكل متسلسل (N طلب شبكة منفصل واحد تلو الآخر — 10
+    // عناصر = 10 رحلات شبكة كاملة بدل رحلة واحدة)، وهذا كان يجري في كل مرة
+    // تتغيّر فيها السلة (observeCart تعمل منذ إقلاع التطبيق مباشرة عبر
+    // Eagerly بـMainViewModel، وليس فقط عند فتح شاشة السلة فعلياً) — سبب
+    // مباشر لبطء عام محسوس عند فتح أي صفحة، وليس فقط صفحة السلة أو المفضلة.
+    // الحل: whereIn تجمع حتى 30 معرّفاً بطلب شبكة واحد، ومجموعات الـ30
+    // المتعددة (نادرة جداً عملياً) تُطلَق بالتوازي معاً بدل التسلسل.
+    private suspend fun fetchProductSnapsByIds(ids: List<String>): Map<String, DocumentSnapshot> {
+        if (ids.isEmpty()) return emptyMap()
+        return coroutineScope {
+            ids.distinct().chunked(30).map { chunk ->
+                async {
+                    db.collection("products")
+                        .whereIn(com.google.firebase.firestore.FieldPath.documentId(), chunk)
+                        .get().await().documents
+                }
+            }.awaitAll().flatten().associateBy { it.id }
+        }
+    }
+
+    // ✅ يفرّق رسالة "لا يوجد اتصال بالإنترنت" الواضحة عن أي فشل آخر (صلاحيات،
+    // خطأ سيرفر...) بدل عرض نص استثناء تقني خام للمستخدم دائماً — يُستخدم في
+    // كل مكان يحتاج ترجمة فشل شبكة إلى رسالة عربية مفهومة (راجع getProducts
+    // وAlgoliaSearchService لنفس المنطق على مسار البحث).
+    fun isConnectivityFailure(e: Throwable): Boolean {
+        if (e is UnknownHostException || e is SocketTimeoutException) return true
+        if (e is IOException) return true
+        val fe = e as? com.google.firebase.firestore.FirebaseFirestoreException
+        return fe?.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.UNAVAILABLE ||
+            fe?.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.DEADLINE_EXCEEDED
+    }
+
+    fun friendlyLoadError(e: Throwable): String =
+        if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+        else "تعذّر تحميل المنتجات، حاول مرة أخرى"
 
     // ✅ جديد (Pagination/Infinite Scroll): قناة جانبية تحمل معلومات الصفحة
     // التالية بعد كل استدعاء لـgetProducts — بنفس أسلوب lastProductsError
@@ -447,6 +490,14 @@ class FirestoreRepository {
             )
             lastAlgoliaPage = algoliaPage + 1
             lastProductsHasMore = page.hasMore
+            // ✅ إصلاح: AlgoliaSearchService كانت تبتلع كل استثناء (بلا اتصال،
+            // مهلة، خطأ سيرفر) وتُرجع قائمة فارغة بصمت تام، فتظهر واجهة البحث
+            // نفس شاشة "لم نجد أي منتجات" حتى عندما يكون السبب الحقيقي انقطاع
+            // الاتصال تماماً — رسالة مضلِّلة تدفع المستخدم لتغيير كلمة البحث
+            // بدل التحقق من اتصاله. الآن SearchPage تحمل سبب الفشل الفعلي (إن
+            // وُجد) لنعرضه بدل نص "لا نتائج" حين تكون النتيجة فارغة بسبب فشل
+            // فعلي لا بسبب بحث لم يُطابق شيئاً.
+            lastProductsError = page.error
             return page.products
         }
 
@@ -487,7 +538,11 @@ class FirestoreRepository {
             }
         } catch (e: Exception) {
             Log.e("FirestoreRepo", "getProducts failed: ${e.message}", e)
-            lastProductsError = "${e.javaClass.simpleName}: ${e.message}"
+            // ✅ إصلاح: كانت تُعرض للمستخدم كنص استثناء تقني خام (مثال:
+            // "FirebaseFirestoreException: UNAVAILABLE")، والذي كان دائماً
+            // يُعامَل في الواجهة كـ"فشل تحميل" عام أياً كان السبب — لم يكن
+            // يوضّح تحديداً أن السبب انقطاع الاتصال تحديداً حين يكون كذلك.
+            lastProductsError = friendlyLoadError(e)
             emptyList()
         }
     }
@@ -527,29 +582,44 @@ class FirestoreRepository {
             }
 
             launch {
+                // ✅ إصلاح أداء جذري: كانت هذه الحلقة تجلب مستند كل منتج بالسلة
+                // بطلب شبكة منفصل ومتسلسل (await() واحدة تلو الأخرى) — لسلة من
+                // 6 عناصر مثلاً، تعني 6 رحلات ذهاب/إياب كاملة قبل ظهور السلة،
+                // وتتكرر مع كل تغيير طفيف بالسلة. وبما أن observeCart تُشغَّل
+                // Eagerly منذ إقلاع التطبيق (وليس فقط عند فتح شاشة السلة)، كان
+                // هذا يزاحم بقية طلبات الشبكة (الرئيسية والمنتجات) في كل مرة
+                // يُفتح التطبيق. الآن: طلب واحد (أو القليل عند تعدد الدفعات)
+                // عبر whereIn يجلب كل المنتجات دفعة واحدة بالتوازي.
+                val snapsById = try {
+                    fetchProductSnapsByIds(rawItems.map { it.productId })
+                } catch (e: Exception) {
+                    null
+                }
                 val enriched = mutableListOf<CartItem>()
                 val batch = db.batch()
                 var needsCommit = false
                 for (item in rawItems) {
-                    try {
-                        val productSnap = db.collection("products").document(item.productId).get().await()
-                        val isActive = productSnap.getBoolean("isActive") != false
-                        val stock = productSnap.getLong2("stock")
-                        if (!productSnap.exists() || !isActive || stock <= 0) {
-                            // المنتج لم يعد موجوداً/نشطاً أو نفدت كميته بالكامل: نحذفه تلقائياً من السلة
-                            batch.delete(cartCollection.document(item.id))
-                            needsCommit = true
-                            continue
-                        }
-                        val cappedQty = minOf(item.quantity.toLong(), stock).toInt()
-                        if (cappedQty != item.quantity) {
-                            batch.update(cartCollection.document(item.id), "quantity", cappedQty)
-                            needsCommit = true
-                        }
-                        enriched.add(item.copy(quantity = cappedQty, stock = stock))
-                    } catch (e: Exception) {
+                    val productSnap = snapsById?.get(item.productId)
+                    if (snapsById == null) {
+                        // فشل الجلب الدفعي بالكامل (مثال: بلا اتصال) — نُبقي عناصر
+                        // السلة كما هي بدل حذفها خطأً على أنها "غير موجودة".
                         enriched.add(item)
+                        continue
                     }
+                    val isActive = productSnap?.getBoolean("isActive") != false
+                    val stock = productSnap?.getLong2("stock") ?: 0L
+                    if (productSnap == null || !productSnap.exists() || !isActive || stock <= 0) {
+                        // المنتج لم يعد موجوداً/نشطاً أو نفدت كميته بالكامل: نحذفه تلقائياً من السلة
+                        batch.delete(cartCollection.document(item.id))
+                        needsCommit = true
+                        continue
+                    }
+                    val cappedQty = minOf(item.quantity.toLong(), stock).toInt()
+                    if (cappedQty != item.quantity) {
+                        batch.update(cartCollection.document(item.id), "quantity", cappedQty)
+                        needsCommit = true
+                    }
+                    enriched.add(item.copy(quantity = cappedQty, stock = stock))
                 }
                 if (needsCommit) {
                     try { batch.commit().await() } catch (e: Exception) { /* ignore */ }
@@ -660,18 +730,19 @@ class FirestoreRepository {
             if (favDocs.isEmpty()) return emptyList()
 
             val productIds = favDocs.map { it.getString("productId") ?: it.id }
-            val productSnaps = productIds.map { id ->
-                db.collection("products").document(id).get().await()
-            }
+            // ✅ إصلاح أداء: نفس مشكلة observeCart أعلاه بالضبط — كان يجلب
+            // مستند كل منتج مفضَّل بطلب منفصل ومتسلسل. الآن جلب دفعي بالتوازي.
+            val snapsById = fetchProductSnapsByIds(productIds)
 
             val batch = db.batch()
             var needsCommit = false
             val result = mutableListOf<Product>()
 
-            favDocs.forEachIndexed { idx, favDoc ->
-                val snap = productSnaps[idx]
-                val product = if (snap.exists()) snap.toObject(Product::class.java)?.copy(id = snap.id) else null
-                if (product == null || snap.getBoolean("isActive") == false) {
+            favDocs.forEach { favDoc ->
+                val productId = favDoc.getString("productId") ?: favDoc.id
+                val snap = snapsById[productId]
+                val product = if (snap != null && snap.exists()) snap.toObject(Product::class.java)?.copy(id = snap.id) else null
+                if (product == null || snap?.getBoolean("isActive") == false) {
                     // المنتج لم يعد موجوداً أو أصبح غير نشط: نحذفه تلقائياً من المفضلة
                     // (مطابق تماماً لنفس التنظيف التلقائي في getFavorites بالموقع)
                     batch.delete(favRef.document(favDoc.id))

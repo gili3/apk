@@ -11,6 +11,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -36,7 +39,12 @@ object AlgoliaSearchService {
 
     // ✅ جديد (Pagination): نتيجة صفحة واحدة من البحث + هل توجد صفحة تالية
     // (nbPages من استجابة Algolia نفسها — لا حاجة لتخمين عبر مقارنة الحجم).
-    data class SearchPage(val products: List<Product>, val hasMore: Boolean)
+    // ✅ إصلاح: أضيف حقل error — سابقاً كان أي فشل (بلا اتصال، مهلة، خطأ
+    // سيرفر) يُبتلَع بصمت ويُعاد products=emptyList() بالضبط كما لو أن
+    // البحث نفسه لم يُطابق أي منتج، فتظهر واجهة البحث رسالة "لم نجد أي
+    // منتجات" حتى عندما يكون السبب الحقيقي انقطاع الاتصال. الآن الفشل
+    // الفعلي يحمل سبباً واضحاً بدل نتيجة فارغة سليمة الشكل.
+    data class SearchPage(val products: List<Product>, val hasMore: Boolean, val error: String? = null)
 
     val isConfigured: Boolean
         get() = BuildConfig.ALGOLIA_APP_ID.isNotBlank() && BuildConfig.ALGOLIA_SEARCH_API_KEY.isNotBlank()
@@ -107,7 +115,7 @@ object AlgoliaSearchService {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     Log.e("AlgoliaSearch", "HTTP ${response.code}: ${response.message}")
-                    return@withContext SearchPage(emptyList(), false)
+                    return@withContext SearchPage(emptyList(), false, error = "تعذّر إتمام البحث، حاول مرة أخرى")
                 }
                 val json = JSONObject(response.body?.string().orEmpty())
                 val hits: JSONArray = json.optJSONArray("hits") ?: JSONArray()
@@ -123,7 +131,15 @@ object AlgoliaSearchService {
             // عمداً — راجع FirestoreRepository.getProducts لتفاصيل السبب:
             // البحث والفلترة يجب أن يمرّا عبر Algolia فقط، لا محلياً على الجهاز).
             Log.e("AlgoliaSearch", "searchProducts(\"$query\") failed: ${e.message}", e)
-            SearchPage(emptyList(), false)
+            // ✅ إصلاح: نفرّق هنا تحديداً بين "لا يوجد اتصال بالإنترنت" (رسالة
+            // واضحة قابلة للتصرف من المستخدم) وأي فشل آخر (سيرفر Algolia، مهلة
+            // غير متعلقة بالاتصال...) — بدل معاملة الحالتين كنتيجة بحث فارغة
+            // سليمة الشكل، بلا أي تفسير للمستخدم عن سبب عدم ظهور نتائج.
+            val message = if (e is UnknownHostException || e is SocketTimeoutException || e is IOException)
+                "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+            else
+                "تعذّر إتمام البحث، حاول مرة أخرى"
+            SearchPage(emptyList(), false, error = message)
         }
     }
 

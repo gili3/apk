@@ -14,7 +14,7 @@ import com.google.firebase.appcheck.appCheck
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
-import com.google.firebase.firestore.MemoryCacheSettings
+import com.google.firebase.firestore.PersistentCacheSettings
 import com.google.firebase.initialize
 
 // ═══════════════════════════════════════════════════════════════
@@ -34,21 +34,26 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
         super.onCreate()
         createNotificationChannel()
         initFirebaseAppCheck()
-        disableFirestoreOfflinePersistence()
+        configureFirestoreCache()
     }
 
-    // ✅ إصلاح (إلغاء العمل بدون إنترنت نهائياً): Firestore Android SDK يُفعِّل
-    // Persistence (كاش القرص) افتراضياً بلا أي إعداد صريح — أي أن استدعاءات
-    // .get() قد تُعاد بصمت من نسخة محلية قديمة مخزَّنة حتى بدون اتصال فعلي
-    // بالإنترنت، خلافاً تماماً للمطلوب (كل البيانات يجب أن تعتمد على اتصال
-    // حي، بلا أي كاش أو بيانات محلية كبديل). MemoryCacheSettings تُبقي فقط
-    // كاشاً بالذاكرة لمدة الجلسة الحالية (لتفادي إعادة نفس القراءة أثناء نفس
-    // الشاشة) بلا أي إصرار (persistence) على القرص يبقى بعد إغلاق التطبيق أو
-    // بلا اتصال. يجب ضبطها مرة واحدة هنا قبل أي استخدام لـFirebaseFirestore
-    // بالتطبيق (FirestoreRepository ينشئ instance عبر getInstance() لاحقاً).
-    private fun disableFirestoreOfflinePersistence() {
+    // ✅ إصلاح (كان "إلغاء العمل بدون إنترنت نهائياً" — عُدِّل بعد بلاغات بطء
+    // التحميل وعدم وضوح رسالة انقطاع الاتصال): استدعاءات Firestore .get() في
+    // هذا التطبيق تستخدم المصدر الافتراضي (Source.DEFAULT)، الذي يحاول
+    // السيرفر أولاً دائماً؛ الكاش لا يُستخدم إلا عند تعذّر الوصول الفعلي
+    // للسيرفر. أي أن تفعيل كاش دائم هنا **لا** يعرض بيانات قديمة بدلاً من
+    // حيّة طالما الاتصال متوفر — فقط يضيف بديلاً حين ينقطع الاتصال فعلاً،
+    // بدل شاشة فارغة/فشل تام. حجم صغير (20MB) يكفي بيانات المنتجات/الفئات
+    // النصية (لا صور — تلك مسؤولية كاش Coil المنفصل أدناه). يجب ضبطها مرة
+    // واحدة هنا قبل أي استخدام لـFirebaseFirestore بالتطبيق (FirestoreRepository
+    // ينشئ instance عبر getInstance() لاحقاً).
+    private fun configureFirestoreCache() {
         val settings = FirebaseFirestoreSettings.Builder()
-            .setLocalCacheSettings(MemoryCacheSettings.newBuilder().build())
+            .setLocalCacheSettings(
+                PersistentCacheSettings.newBuilder()
+                    .setSizeBytes(20L * 1024 * 1024)
+                    .build()
+            )
             .build()
         FirebaseFirestore.getInstance().firestoreSettings = settings
     }
@@ -116,6 +121,14 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
             }
             .respectCacheHeaders(false) // صور المنتجات لا تتغيّر كثيراً، لذا نعتمد كاش محلي ثابت بدل رؤوس HTTP
             .crossfade(true)
+            // ✅ إصلاح أداء (بطء ظهور صور المنتجات): صور المنتجات لا تحتاج قناة
+            // شفافية (Alpha) ولا دقة ألوان ARGB_8888 الكاملة لعرضها بشبكة/بطاقات
+            // صغيرة. RGB_565 يُنصف حجم كل بكسل بالذاكرة (2 بايت بدل 4)، فيسرّع
+            // فك الترميز (decode) والعرض فعلياً، خصوصاً لصور المنتجات ذات الدقة
+            // العالية القادمة مباشرة من كاميرات الجوال بلا أي تصغير من السيرفر.
+            // Coil يستخدمها تلقائياً فقط للصور غير الشفافة عند تفعيلها (آمن، لا
+            // يؤثر على صور تحتوي شفافية فعلية كالشعارات بخلفية PNG شفافة).
+            .allowRgb565(true)
             .build()
     }
 }

@@ -469,7 +469,13 @@ fun ProductsScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                            // ✅ إصلاح: كانت هذه الرسالة نصاً ثابتاً دائماً بصرف النظر
+                            // عن سبب الفشل الفعلي (loadError نفسها لم تكن تُعرَض
+                            // إطلاقاً) — الآن نعرض الرسالة الدقيقة القادمة من
+                            // FirestoreRepository/AlgoliaSearchService، والتي تفرّق
+                            // فعلياً بين "لا يوجد اتصال بالإنترنت" وأي فشل آخر، مع
+                            // إبقاء نفس النص السابق كبديل احتياطي فقط إن غابت الرسالة.
+                            loadError ?: "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
                             color = MutedForeground,
                             fontSize = 14.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,

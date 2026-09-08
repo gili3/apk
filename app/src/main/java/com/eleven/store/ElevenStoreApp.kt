@@ -35,6 +35,22 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
         createNotificationChannel()
         initFirebaseAppCheck()
         configureFirestoreCache()
+        logAlgoliaConfigStatus()
+    }
+
+    // ✅ جديد: سطر تشخيص واحد آمن (لا يطبع المفتاح نفسه، فقط طوله ومعرّف
+    // التطبيق) يظهر عند كل إقلاع بـLogcat (فلتر "AlgoliaConfig") — يجيب فوراً
+    // عن سؤال "هل المفاتيح وصلت لهذا الـbuild تحديداً بالأصل؟" بدل تخمين ذلك
+    // من سلوك البحث في الواجهة (فارغ بسبب "لا نتائج" حقيقية أم بسبب مفتاح
+    // فارغ من الأساس؟ نفس الشكل تماماً بالنسبة للمستخدم، مختلف تماماً بالسبب).
+    private fun logAlgoliaConfigStatus() {
+        val appId = com.eleven.store.BuildConfig.ALGOLIA_APP_ID
+        val key = com.eleven.store.BuildConfig.ALGOLIA_SEARCH_API_KEY
+        android.util.Log.i(
+            "AlgoliaConfig",
+            "appId=${if (appId.isBlank()) "(فارغ)" else appId} " +
+                "key=${if (key.isBlank()) "(فارغ)" else "موجود (${key.length} حرف)"}",
+        )
     }
 
     // ✅ إصلاح (كان "إلغاء العمل بدون إنترنت نهائياً" — عُدِّل بعد بلاغات بطء

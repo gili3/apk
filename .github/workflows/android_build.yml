@@ -72,6 +72,17 @@ jobs:
         RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
         RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        # ✅ إصلاح: كانا مفقودين هنا تماماً — secret() بـbuild.gradle يقرأ من
+        # System.getenv() في بيئة CI (لا يوجد local.properties على الـrunner)،
+        # وبدون تمريرهما هنا صراحةً كانا يصلان فارغين دائماً مهما كانت قيمتهما
+        # الفعلية بـGitHub Secrets. النتيجة: أي APK بُني عبر هذا الـpipeline كان
+        # يحمل ALGOLIA_APP_ID/ALGOLIA_SEARCH_API_KEY فارغين، فـ
+        # AlgoliaSearchService.isConfigured تكون false دائماً، ويفشل أي بحث
+        # فوراً برسالة "خدمة البحث غير مهيّأة حالياً" — بصرف النظر عن صحة
+        # المفاتيح نفسها. أضف هذين السرّين بنفس الاسم في Settings → Secrets
+        # and variables → Actions إن لم يكونا موجودين مسبقاً.
+        ALGOLIA_APP_ID: ${{ secrets.ALGOLIA_APP_ID }}
+        ALGOLIA_SEARCH_API_KEY: ${{ secrets.ALGOLIA_SEARCH_API_KEY }}
       run: ./gradlew assembleRelease bundleRelease
 
     - name: Remove decoded keystore

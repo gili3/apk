@@ -294,6 +294,15 @@ fun ElevenNavGraph(
                 viewModel = viewModel,
                 orderId = orderId,
                 onBack = { navController.popBackStack() },
+                // ✅ توحيد سلوك الإشعارات: إن كان الطلب غير موجود (محذوف/معرّف
+                // خاطئ/غير مصرَّح بالوصول له)، نفتح صفحة الإشعارات مع رسالة
+                // مناسبة بدل ترك المستخدم على سبينر تحميل لا نهائي — بنفس
+                // القاعدة المطبَّقة على الموقع لهذه الحالة بالضبط.
+                onOrderNotFound = {
+                    navController.navigate(Route.NOTIFICATIONS) {
+                        popUpTo(Route.ORDER_DETAIL) { inclusive = true }
+                    }
+                },
             )
         }
         composable(Route.CHECKOUT) {

@@ -4,7 +4,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import androidx.core.app.NotificationCompat
+import coil.Coil
+import coil.request.ImageRequest
 import com.eleven.store.MainActivity
 import com.eleven.store.R
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -12,6 +16,8 @@ import com.google.firebase.messaging.RemoteMessage
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import android.util.Log
 
 /**
@@ -35,8 +41,9 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
         val body = data["body"] ?: ""
         val type = data["type"] ?: "general"
         val actionRoute = data["actionRoute"]?.takeIf { it.isNotBlank() }
+        val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
 
-        showNotification(notificationId, title, body, type, actionRoute)
+        showNotification(notificationId, title, body, type, actionRoute, imageUrl)
 
         // لا كتابة على "users/{uid}/notifications" من هنا عمداً — سجل
         // الإشعار مكتوب بالفعل قبل وصول هذا الـPush أصلاً (نواة notify() في
@@ -56,7 +63,7 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
             .addOnFailureListener { e -> Log.e("FCM", "فشل حفظ توكن الإشعارات: ${e.message}", e) }
     }
 
-    private fun showNotification(notificationId: String?, title: String, body: String, type: String, actionRoute: String?) {
+    private fun showNotification(notificationId: String?, title: String, body: String, type: String, actionRoute: String?, imageUrl: String? = null) {
         // نفس معرّف القناة المُنشأة مسبقاً بـ ElevenStoreApp عند إقلاع
         // التطبيق (وليس معرّفاً حرفياً مكرراً هنا) — قناة واحدة موحّدة
         // للتطبيق كله، تُنشأ مرة واحدة بدل كل مرة يصل فيها إشعار.
@@ -66,13 +73,20 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
         // "order/abc123" (Route.ORDER_DETAIL بالضبط) — نفس تنسيق actionRoute
         // المُرسل من السيرفر بعد إزالة الشرطة المائلة الأولى، فيُفتح مباشرة
         // نفس المسار الذي يفتحه الرابط المكافئ على الموقع (/order/abc123).
-        val navRoute = actionRoute?.removePrefix("/")
+        // ✅ إصلاح (توحيد سلوك الإشعارات): كان يُترَك بلا أي extra عند غياب/
+        // فراغ actionRoute — فيُفتح التطبيق على شاشته الافتراضية بدل صفحة
+        // الإشعارات، خلافاً لسلوك الموقع (service worker يفتح "/notifications"
+        // دائماً في هذه الحالة بالضبط). الآن نفس القاعدة على كلا المنصتين:
+        // رابط فارغ/null/غير صالح (لا يبدأ بـ"/") → "notifications".
+        val navRoute = actionRoute
+            ?.takeIf { it.startsWith("/") }
+            ?.removePrefix("/")
+            ?.takeIf { it.isNotBlank() }
+            ?: com.eleven.store.navigation.Route.NOTIFICATIONS
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            if (!navRoute.isNullOrBlank()) {
-                putExtra(MainActivity.NOTIFICATION_ROUTE_EXTRA, navRoute)
-            }
+            putExtra(MainActivity.NOTIFICATION_ROUTE_EXTRA, navRoute)
         }
         // ✅ إصلاح تكرار العرض: المعرّف السابق كان مبنياً من
         // (العنوان+النص+الوقت الحالي).hashCode() — أي فريد دوماً حتى لإعادة
@@ -92,14 +106,54 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setGroup("eleven_store_$type")
             .setContentIntent(pendingIntent)
+            .apply {
+                // ✅ جديد (عرض صورة الإشعار): يحمّل الصورة من imageUrl إن توفرت
+                // ويعرضها بـBigPictureStyle. عند فشل التحميل (لا شبكة، رابط
+                // معطوب، انتهت المهلة 5 ثوانٍ) يظهر الإشعار بلا صورة تماماً
+                // كالسابق — بدون تأخير عرض الإشعار إلى ما لا نهاية.
+                val bigPicture = loadBitmapBlocking(imageUrl)
+                if (bigPicture != null) {
+                    setLargeIcon(bigPicture)
+                    setStyle(
+                        NotificationCompat.BigPictureStyle()
+                            .bigPicture(bigPicture)
+                            .bigLargeIcon(null as Bitmap?)
+                    )
+                } else {
+                    setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                }
+            }
             .build()
 
         notificationManager.notify(stableId, notification)
+    }
+
+    // ✅ جديد: تحميل صورة الإشعار بشكل متزامن (Coil) بمهلة قصوى 5 ثوانٍ —
+    // onMessageReceived يُستدعى أصلاً على خيط خلفية من مكتبة FCM نفسها، لذا
+    // الحجب المؤقت هنا آمن ولا يُجمِّد أي واجهة مستخدم. allowHardware(false)
+    // ضروري لأن BigPictureStyle يتطلب Bitmap عادياً وليس Hardware Bitmap.
+    private fun loadBitmapBlocking(url: String?): Bitmap? {
+        if (url.isNullOrBlank()) return null
+        return try {
+            runBlocking {
+                withTimeoutOrNull(5000L) {
+                    val loader = Coil.imageLoader(applicationContext)
+                    val request = ImageRequest.Builder(applicationContext)
+                        .data(url)
+                        .allowHardware(false)
+                        .build()
+                    val result = loader.execute(request)
+                    (result.drawable as? BitmapDrawable)?.bitmap
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FCM", "فشل تحميل صورة الإشعار: ${e.message}", e)
+            null
+        }
     }
 }

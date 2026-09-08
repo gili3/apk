@@ -34,6 +34,10 @@ import java.util.concurrent.TimeUnit
  */
 object AlgoliaSearchService {
 
+    // ✅ جديد (Pagination): نتيجة صفحة واحدة من البحث + هل توجد صفحة تالية
+    // (nbPages من استجابة Algolia نفسها — لا حاجة لتخمين عبر مقارنة الحجم).
+    data class SearchPage(val products: List<Product>, val hasMore: Boolean)
+
     val isConfigured: Boolean
         get() = BuildConfig.ALGOLIA_APP_ID.isNotBlank() && BuildConfig.ALGOLIA_SEARCH_API_KEY.isNotBlank()
 
@@ -62,9 +66,13 @@ object AlgoliaSearchService {
         // النصي مع فلتر "جديد" أو "الأكثر مبيعاً" كان يتجاهلهما بصمت.
         isBestSeller: Boolean? = null,
         isNew: Boolean? = null,
-        hitsPerPage: Int = 60,
-    ): List<Product> = withContext(Dispatchers.IO) {
-        if (!isConfigured) return@withContext emptyList()
+        // ✅ إصلاح (Pagination): كان hitsPerPage=60 بلا أي معامل "page" —
+        // نتيجة واحدة ثابتة فقط، بلا أي طريقة لطلب المزيد. الآن حجم صفحة
+        // معقول (30، مطابق لحجم صفحة التصفح العادي) + page قابل للزيادة.
+        hitsPerPage: Int = 30,
+        page: Int = 0,
+    ): SearchPage = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext SearchPage(emptyList(), false)
 
         try {
             // ✅ نفس منطق الاستبعاد المطبَّق بالضبط على الموقع (client/src/lib/algolia.ts)
@@ -85,6 +93,7 @@ object AlgoliaSearchService {
                 put("query", query)
                 put("filters", filters.joinToString(" AND "))
                 put("hitsPerPage", hitsPerPage)
+                put("page", page)
             }.toString()
 
             val url = "https://${BuildConfig.ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/$INDEX_NAME/query"
@@ -98,18 +107,23 @@ object AlgoliaSearchService {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     Log.e("AlgoliaSearch", "HTTP ${response.code}: ${response.message}")
-                    return@withContext emptyList()
+                    return@withContext SearchPage(emptyList(), false)
                 }
                 val json = JSONObject(response.body?.string().orEmpty())
                 val hits: JSONArray = json.optJSONArray("hits") ?: JSONArray()
-                (0 until hits.length()).map { i -> hitToProduct(hits.getJSONObject(i)) }
+                val products = (0 until hits.length()).map { i -> hitToProduct(hits.getJSONObject(i)) }
+                // nbPages من استجابة Algolia نفسها (وليس تخمين من حجم النتيجة) —
+                // يخبرنا بدقة إن كانت هناك صفحة تالية فعلياً (page مفهرسة من 0).
+                val nbPages = json.optInt("nbPages", if (products.isEmpty()) 0 else 1)
+                SearchPage(products, hasMore = (page + 1) < nbPages)
             }
         } catch (e: Exception) {
-            // ✅ فشل البحث عبر Algolia (بلا شبكة، خطأ مفاتيح...) لا يجب أن يُسقِط
-            // الشاشة — المستدعي (FirestoreRepository.getProducts) يرجع تلقائياً
-            // لفلترة Firestore المحلية القديمة عند نتيجة فارغة (انظر هناك).
+            // ⚠️ فشل البحث عبر Algolia (بلا شبكة، خطأ مفاتيح...) — لا يوجد أي
+            // fallback لفلترة Firestore محلية بعد الآن (كان هنا سابقاً، أُزيل
+            // عمداً — راجع FirestoreRepository.getProducts لتفاصيل السبب:
+            // البحث والفلترة يجب أن يمرّا عبر Algolia فقط، لا محلياً على الجهاز).
             Log.e("AlgoliaSearch", "searchProducts(\"$query\") failed: ${e.message}", e)
-            emptyList()
+            SearchPage(emptyList(), false)
         }
     }
 

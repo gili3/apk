@@ -525,7 +525,27 @@ fun ProductsScreen(
 
                 // ── شبكة المنتجات — grid-cols-2 ──────────────────
                 else -> {
+                    // ✅ Pagination/Infinite Scroll: نراقب آخر عنصر ظاهر بالشبكة،
+                    // وعند الوصول قريباً من نهاية القائمة المحمَّلة نطلب الصفحة
+                    // التالية تلقائياً (بدل زر "تحميل المزيد" — أنسب لشبكة صور).
+                    val hasMoreProducts by viewModel.hasMoreProducts.collectAsStateWithLifecycle()
+                    val isLoadingMoreProducts by viewModel.isLoadingMoreProducts.collectAsStateWithLifecycle()
+                    val gridState = rememberLazyGridState()
+
+                    LaunchedEffect(gridState, products, hasMoreProducts) {
+                        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+                            .collect { lastVisibleIndex ->
+                                if (lastVisibleIndex != null &&
+                                    lastVisibleIndex >= products.size - 4 &&
+                                    hasMoreProducts && !isLoadingMoreProducts
+                                ) {
+                                    viewModel.loadMoreProducts()
+                                }
+                            }
+                    }
+
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(2),
                         contentPadding = PaddingValues(
                             start = 12.dp,
@@ -544,6 +564,16 @@ fun ProductsScreen(
                                 onAddToCart = { viewModel.addToCart(product) },
                                 onClick = { onProductClick(product.id) },
                             )
+                        }
+                        if (isLoadingMoreProducts) {
+                            item(span = { GridItemSpan(2) }) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp))
+                                }
+                            }
                         }
                     }
                 }

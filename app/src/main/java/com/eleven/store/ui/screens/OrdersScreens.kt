@@ -318,16 +318,40 @@ fun OrderDetailScreen(
     viewModel: MainViewModel,
     orderId: String,
     onBack: () -> Unit,
+    // ✅ توحيد سلوك الإشعارات: يُستدعى عند تأكّد أن الطلب غير موجود (بعد
+    // انتهاء التحميل فعلياً لا أثناءه) — المستدعي (NavGraph) يحوّل لصفحة
+    // الإشعارات مع رسالة مناسبة بدل ترك المستخدم على سبينر لا نهائي.
+    onOrderNotFound: () -> Unit = {},
 ) {
     val order by viewModel.selectedOrder.collectAsStateWithLifecycle()
+    val isOrderLoading by viewModel.isOrderLoading.collectAsStateWithLifecycle()
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    LaunchedEffect(orderId) { viewModel.loadOrder(orderId) }
+    // ✅ نفرّق بين "لم يبدأ التحميل بعد" و"انتهى التحميل بلا نتيجة" — بدون
+    // هذا التمييز، isOrderLoading==false في أول تركيب (قبل انطلاق
+    // LaunchedEffect(orderId) أدناه) كانت ستُفسَّر خطأً كـ"غير موجود" فوراً.
+    var loadAttempted by remember(orderId) { mutableStateOf(false) }
+
+    LaunchedEffect(orderId) {
+        loadAttempted = false
+        viewModel.loadOrder(orderId)
+    }
+    LaunchedEffect(isOrderLoading) {
+        if (isOrderLoading) loadAttempted = true
+    }
+
+    val confirmedNotFound = loadAttempted && !isOrderLoading && order == null
+    LaunchedEffect(confirmedNotFound) {
+        if (confirmedNotFound) {
+            viewModel.setOrderNotFoundMessage("تعذّر العثور على هذا الطلب — قد يكون محذوفاً أو غير متاح")
+            onOrderNotFound()
+        }
+    }
 
     Scaffold(topBar = { ElevenTopBar(title = "تفاصيل الطلب", onBack = onBack) }) { padding ->
         when {
-            // ── تحميل ──
+            // ── تحميل (أو تأكّد عدم الوجود وجارٍ التحويل لصفحة الإشعارات) ──
             order == null -> {
                 Box(
                     Modifier.fillMaxSize().padding(padding),

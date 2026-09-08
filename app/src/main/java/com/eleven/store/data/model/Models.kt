@@ -211,6 +211,8 @@ data class NotificationItem(
     val isRead: Boolean = false,
     /** مسار داخلي يُفتح عند الضغط على الإشعار، مثال: "/order/abc123" */
     val actionRoute: String = "",
+    /** رابط صورة اختيارية (إشعارات العروض غالباً) — مطابق لـshared/types.ts::AppNotification.imageUrl */
+    val imageUrl: String = "",
     val createdAt: Timestamp? = null,
 ) {
     /** اسم بديل لمحتوى الإشعار (نفس body) */

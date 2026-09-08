@@ -153,6 +153,29 @@ class MainViewModel : ViewModel() {
     private val _allProducts = MutableStateFlow<List<Product>>(emptyList())
     val allProducts: StateFlow<List<Product>> = _allProducts
 
+    // ✅ جديد (Pagination/Infinite Scroll): هل توجد صفحة منتجات تالية،
+    // وحالة تحميلها — منفصلة عن isLoading/الصفحة الأولى حتى لا يظهر سبينر
+    // ملء الشاشة عند التمرير لأسفل لتحميل المزيد فقط.
+    private val _hasMoreProducts = MutableStateFlow(false)
+    val hasMoreProducts: StateFlow<Boolean> = _hasMoreProducts
+
+    private val _isLoadingMoreProducts = MutableStateFlow(false)
+    val isLoadingMoreProducts: StateFlow<Boolean> = _isLoadingMoreProducts
+
+    // آخر معاملات فلترة/بحث مُستخدَمة بـloadProducts — تُستخدَم في
+    // loadMoreProducts() لطلب الصفحة التالية بنفس الفلاتر بالضبط.
+    private var lastProductsQuery: ProductsQueryParams? = null
+
+    data class ProductsQueryParams(
+        val categoryId: String?,
+        val isFeatured: Boolean?,
+        val isNew: Boolean?,
+        val isBestSeller: Boolean?,
+        val onSale: Boolean?,
+        val brandId: String?,
+        val searchQuery: String?,
+    )
+
     private val _selectedProduct = MutableStateFlow<Product?>(null)
     val selectedProduct: StateFlow<Product?> = _selectedProduct
 
@@ -333,9 +356,15 @@ class MainViewModel : ViewModel() {
         brandId:      String?  = null,
         searchQuery:  String?  = null,
     ) {
+        // ✅ صفحة أولى جديدة (فلتر/بحث تغيّر) — نصفّر أي مؤشر ترقيم قديم
+        // (Firestore cursor أو رقم صفحة Algolia) حتى لا تُخلط صفحات فلتر
+        // سابق بفلتر جديد.
+        val params = ProductsQueryParams(categoryId, isFeatured, isNew, isBestSeller, onSale, brandId, searchQuery)
+        lastProductsQuery = params
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
+            _hasMoreProducts.value = false
             try {
                 // إخفاء المنتجات منتهية الكمية من قائمة المنتجات
                 _allProducts.value = repo.getProducts(
@@ -348,6 +377,7 @@ class MainViewModel : ViewModel() {
                     searchQuery  = searchQuery,
                 ).filter { it.stock > 0 }
                 _error.value = repo.lastProductsError
+                _hasMoreProducts.value = repo.lastProductsHasMore
             } catch (e: Exception) {
                 // ✅ إجراء دفاعي: repo.getProducts() محميّة داخلياً حالياً بالكامل
                 // ولا ترفع استثناءً فعلياً، لكن أي تعديل مستقبلي لا يلتزم بنفس
@@ -355,6 +385,38 @@ class MainViewModel : ViewModel() {
                 _error.value = e.message ?: "تعذّر تحميل المنتجات"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    // ✅ جديد (Pagination/Infinite Scroll): يجلب الصفحة التالية بنفس فلاتر/
+    // بحث آخر استدعاء لـloadProducts بالضبط، ويُلحقها بالقائمة الحالية —
+    // بلا سبينر ملء الشاشة (isLoadingMoreProducts منفصلة عن isLoading).
+    fun loadMoreProducts() {
+        val params = lastProductsQuery ?: return
+        if (!_hasMoreProducts.value || _isLoadingMoreProducts.value) return
+        viewModelScope.launch {
+            _isLoadingMoreProducts.value = true
+            try {
+                val nextPage = repo.getProducts(
+                    categoryId   = params.categoryId,
+                    isFeatured   = params.isFeatured,
+                    isNew        = params.isNew,
+                    isBestSeller = params.isBestSeller,
+                    onSale       = params.onSale,
+                    brandId      = params.brandId,
+                    searchQuery  = params.searchQuery,
+                    startAfter   = repo.lastProductsCursor,
+                    algoliaPage  = repo.lastAlgoliaPage,
+                ).filter { it.stock > 0 }
+                _allProducts.value = _allProducts.value + nextPage
+                _hasMoreProducts.value = repo.lastProductsHasMore
+            } catch (e: Exception) {
+                // فشل تحميل صفحة إضافية لا يجب أن يمسح القائمة المعروضة أصلاً —
+                // فقط نوقف مؤشر "جاري التحميل"، والمستخدم يقدر يعيد المحاولة
+                // بالتمرير مجدداً (hasMoreProducts تبقى كما كانت).
+            } finally {
+                _isLoadingMoreProducts.value = false
             }
         }
     }
@@ -419,12 +481,36 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch { repo.toggleFavorite(productId) }
     }
 
+    // ✅ جديد (توحيد سلوك الإشعارات): يميّز "لا يزال يحمّل" عن "الطلب فعلاً
+    // غير موجود/غير مصرَّح بالوصول له" — نفس تمييز isProductLoading أعلاه.
+    // بدونها، OrderDetailScreen كانت تعامل selectedOrder==null دائماً على
+    // أنها "جاري التحميل" (سبينر لا نهائي) حتى لو تأكد الفشل فعلياً.
+    private val _isOrderLoading = MutableStateFlow(false)
+    val isOrderLoading: StateFlow<Boolean> = _isOrderLoading
+
+    // ✅ جديد (توحيد سلوك الإشعارات): رسالة تُعرض مرة واحدة في صفحة
+    // الإشعارات عند التحويل إليها بسبب طلب غير موجود (بدل تركه صامتاً).
+    // "تُستهلك" مرة واحدة فقط (نفس أسلوب pendingNotificationRoute بـ
+    // MainActivity) حتى لا تتكرر عند أي إعادة تركيب لاحقة للشاشة.
+    private val _orderNotFoundMessage = MutableStateFlow<String?>(null)
+    val orderNotFoundMessage: StateFlow<String?> = _orderNotFoundMessage
+    fun setOrderNotFoundMessage(message: String) { _orderNotFoundMessage.value = message }
+    fun consumeOrderNotFoundMessage() { _orderNotFoundMessage.value = null }
+
     fun loadOrders() {
         viewModelScope.launch { _orders.value = repo.getOrders() }
     }
 
     fun loadOrder(orderId: String) {
-        viewModelScope.launch { _selectedOrder.value = repo.getOrder(orderId) }
+        viewModelScope.launch {
+            _isOrderLoading.value = true
+            _selectedOrder.value = null
+            try {
+                _selectedOrder.value = repo.getOrder(orderId)
+            } finally {
+                _isOrderLoading.value = false
+            }
+        }
     }
 
     // ─── Coupon ─────────────────────────────────────────────────

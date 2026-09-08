@@ -18,7 +18,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -29,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.eleven.store.ui.components.ElevenSnackbarHost
 import com.eleven.store.ui.components.SnackbarType
 import com.eleven.store.ui.components.showMessage
@@ -896,6 +899,17 @@ fun NotificationsScreen(
         if (user != null) viewModel.loadNotifications()
     }
 
+    // ✅ توحيد سلوك الإشعارات: يعرض رسالة "الطلب غير موجود" مرة واحدة عند
+    // التحويل من OrderDetailScreen (راجع MainViewModel.orderNotFoundMessage)،
+    // ثم يستهلكها فوراً حتى لا تتكرر بأي إعادة تركيب لاحقة للشاشة.
+    val orderNotFoundMessage by viewModel.orderNotFoundMessage.collectAsStateWithLifecycle()
+    LaunchedEffect(orderNotFoundMessage) {
+        orderNotFoundMessage?.let { message ->
+            viewModel.consumeOrderNotFoundMessage()
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     // ✅ جديد: بمجرد دخول شاشة الإشعارات، تُعتبر كل الإشعارات الظاهرة حالياً
     // "مقروءة" تلقائياً — مطابق لنفس السلوك المضاف بصفحة الإشعارات بالموقع.
     // مرة واحدة فقط لكل زيارة للشاشة (وليس عند كل تحديث لاحق للقائمة).
@@ -1301,19 +1315,42 @@ private fun SwipeableNotificationCard(
                     verticalAlignment = Alignment.Top,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    // أيقونة النوع بخلفية دائرية ناعمة
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(cfg.bg, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            cfg.icon,
-                            null,
-                            tint = cfg.color,
-                            modifier = Modifier.size(22.dp),
-                        )
+                    // ✅ جديد (عرض صورة الإشعار): صورة مصغّرة عند توفر imageUrl —
+                    // Coil (AsyncImage) يحمّلها بشكل Lazy تلقائياً فقط عند ظهور
+                    // العنصر ضمن LazyColumn، مع placeholder/error موحّدين بنفس
+                    // نمط بطاقات المنتجات أعلاه؛ لا يُكسر شيء إن فشل التحميل —
+                    // فقط تبقى الأيقونة الرمزية ظاهرة كما كانت دائماً.
+                    if (notif.imageUrl.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Neutral100),
+                        ) {
+                            AsyncImage(
+                                model = notif.imageUrl,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                                error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    } else {
+                        // أيقونة النوع بخلفية دائرية ناعمة
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .background(cfg.bg, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                cfg.icon,
+                                null,
+                                tint = cfg.color,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
                     }
 
                     // المحتوى

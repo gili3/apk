@@ -39,6 +39,18 @@ class FirestoreRepository {
 
     var lastProductsError: String? = null
 
+    // ✅ جديد (Pagination/Infinite Scroll): قناة جانبية تحمل معلومات الصفحة
+    // التالية بعد كل استدعاء لـgetProducts — بنفس أسلوب lastProductsError
+    // أعلاه بدل تغيير توقيع الدالة (تفادياً لكسر الاستدعاءات الحالية
+    // بـMainViewModel.loadHomeData التي تجلب دفعة واحدة صغيرة وثابتة).
+    // lastProductsCursor: مؤشر Firestore (DocumentSnapshot) للصفحة التالية
+    // عند التصفح العادي بلا بحث. lastAlgoliaPage: رقم الصفحة التالية عند
+    // البحث عبر Algolia (النظامان مستقلان تماماً، أحدهما فقط يكون فعّالاً
+    // حسب وجود searchQuery من عدمه).
+    var lastProductsCursor: DocumentSnapshot? = null
+    var lastAlgoliaPage: Int = 0
+    var lastProductsHasMore: Boolean = false
+
     // ─── Auth ───────────────────────────────────────────────────
     val currentUser: FirebaseUser? get() = auth.currentUser
 
@@ -395,37 +407,47 @@ class FirestoreRepository {
         onSale:       Boolean? = null,
         brandId:      String?  = null,
         searchQuery:  String?  = null,
-        // ✅ إصلاح: كان 50 (أقل من حد الموقع 100)، ما يجعل نتائج البحث/العرض
-        // على الأندرويد أضيق من الموقع لنفس الاستعلام تماماً. جرى توحيده مع
-        // حد الموقع (server/firestore-router.ts getProducts limit(100)).
-        limit:        Long     = 100,
+        // ✅ Pagination: مؤشر Firestore لصفحة التصفح التالية (يُتجاهل عند
+        // وجود بحث نصي — يُستخدم عندها algoliaPage بدلاً منه).
+        startAfter:   DocumentSnapshot? = null,
+        // ✅ Pagination: رقم صفحة Algolia التالية (مفهرس من 0، يُستخدم فقط
+        // عند وجود بحث نصي).
+        algoliaPage:  Int      = 0,
+        // ✅ إصلاح: كان 100 وبلا أي pagination — دفعة واحدة كبيرة ثابتة.
+        // الآن حجم صفحة حقيقي (30) يُستكمل عبر startAfter/algoliaPage بدل
+        // تحميل كل المنتجات دفعة واحدة عند فتح الشاشة (راجع lastProductsCursor
+        // /lastAlgoliaPage/lastProductsHasMore لمعرفة إن كانت هناك صفحة تالية).
+        limit:        Long     = 30,
     ): List<Product> {
         lastProductsError = null
+        lastProductsCursor = null
+        lastProductsHasMore = false
 
-        // ✅ Algolia: عند وجود نص بحث فعلي ومفاتيح Algolia مضبوطة، نستخدم
-        // البحث الحقيقي بدل جلب حتى 100 منتج من Firestore وفلترتهم محلياً
-        // بـcontains() (نفس القيد القديم المشترك مع الموقع). عند فشل الطلب
-        // أو فراغ النتيجة أو عدم ضبط المفاتيح، نرجع تلقائياً لمسار Firestore
-        // القديم أدناه — البحث لا يتعطل كلياً بغياب Algolia.
-        if (!searchQuery.isNullOrBlank() && AlgoliaSearchService.isConfigured) {
-            val hits = AlgoliaSearchService.searchProducts(
+        // ✅ Algolia فقط للبحث النصي — بلا أي fallback لفلترة Firestore محلية
+        // بعد الآن (كان هنا سابقاً: عند فراغ/فشل Algolia يُعاد جلب حتى 100
+        // منتج من Firestore وفلترتهم محلياً بـcontains()، وهو بالضبط ما يجب
+        // منعه: البحث يجب أن يمرّ عبر Algolia فقط، لا محلياً على الجهاز).
+        if (!searchQuery.isNullOrBlank()) {
+            if (!AlgoliaSearchService.isConfigured) {
+                // بلا مفاتيح Algolia مضبوطة، البحث غير متاح فعلياً — رسالة
+                // واضحة للمستخدم بدل نتائج فلترة محلية غير دقيقة.
+                lastProductsError = "خدمة البحث غير مهيّأة حالياً"
+                return emptyList()
+            }
+            val page = AlgoliaSearchService.searchProducts(
                 query = searchQuery.trim(),
                 categoryId = categoryId,
                 brandId = brandId,
                 onSale = onSale,
                 isFeatured = isFeatured,
-                // ✅ إصلاح: كانا يُسقَطان بصمت قبل هذا التعديل — البحث بالنص
-                // مع فلتر "جديد"/"الأكثر مبيعاً" كان يرجع نتائج من كل المنتجات
-                // بدل الاقتصار على الفلتر المطلوب (خلافاً لمسار Firestore
-                // الاحتياطي أدناه الذي كان يطبّقهما بشكل صحيح، فيتضارب سلوك
-                // نفس الشاشة حسب توفر Algolia من عدمه).
                 isBestSeller = isBestSeller,
                 isNew = isNew,
+                hitsPerPage = limit.toInt(),
+                page = algoliaPage,
             )
-            if (hits.isNotEmpty()) return hits
-            // نتيجة فارغة من Algolia (لا فرق بين "لا نتائج فعلاً" و"فشل شبكة"
-            // من منظور المستخدم) — نكمل للمسار القديم أدناه كشبكة أمان أخيرة
-            // بدل عرض "لا نتائج" قد تكون غير صحيحة بسبب عطل مؤقت بـAlgolia فقط.
+            lastAlgoliaPage = algoliaPage + 1
+            lastProductsHasMore = page.hasMore
+            return page.products
         }
 
         return try {
@@ -437,9 +459,8 @@ class FirestoreRepository {
             // (نفس الحقل المفقود على الموقع) — هذا الفلتر كان يعيد قائمة فارغة
             // دائماً. الموقع أصلح هذا باستخدام نافذة تاريخية (آخر 30 يوماً) بدل
             // حقل Boolean وهمي؛ نطابق هنا نفس المنطق تماماً بدل حقل isNew.
-            var newSince: java.util.Date? = null
             if (isNew == true) {
-                newSince = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, -30) }.time
+                val newSince = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, -30) }.time
                 query = query.whereGreaterThanOrEqualTo("createdAt", newSince)
             }
             isBestSeller?.let { query = query.whereEqualTo("isBestSeller", it) }
@@ -449,20 +470,21 @@ class FirestoreRepository {
             // عشوائي فعلياً بدل الأحدث أولاً (نفس عائلة مشكلة الفهارس المذكورة
             // بتعليقات السيرفر). يطابق الآن ترتيب الموقع (createdAt DESC).
             query = query.orderBy("createdAt", Query.Direction.DESCENDING)
-            query = query.limit(limit)
+            if (startAfter != null) {
+                query = query.startAfter(startAfter)
+            }
+            // +1 لمعرفة بدقة إن كانت هناك صفحة تالية فعلياً (نفس نمط
+            // getAllOrdersAdmin بالسيرفر) بدل تخمين عبر مقارنة الحجم بـlimit.
+            query = query.limit(limit + 1)
 
-            val results = query.get().await()
-                .documents.mapNotNull { doc ->
-                    doc.toObject(Product::class.java)?.copy(id = doc.id)
-                }
+            val docs = query.get().await().documents
+            lastProductsHasMore = docs.size.toLong() > limit
+            val pageDocs = if (lastProductsHasMore) docs.dropLast(1) else docs
+            lastProductsCursor = pageDocs.lastOrNull()
 
-            if (!searchQuery.isNullOrBlank()) {
-                val q = searchQuery.lowercase()
-                results.filter {
-                    it.name.lowercase().contains(q) ||
-                    it.description.lowercase().contains(q)
-                }
-            } else results
+            pageDocs.mapNotNull { doc ->
+                doc.toObject(Product::class.java)?.copy(id = doc.id)
+            }
         } catch (e: Exception) {
             Log.e("FirestoreRepo", "getProducts failed: ${e.message}", e)
             lastProductsError = "${e.javaClass.simpleName}: ${e.message}"

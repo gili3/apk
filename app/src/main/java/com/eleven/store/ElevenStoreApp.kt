@@ -12,6 +12,9 @@ import coil.memory.MemoryCache
 import com.google.firebase.Firebase
 import com.google.firebase.appcheck.appCheck
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreSettings
+import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.initialize
 
 // ═══════════════════════════════════════════════════════════════
@@ -31,6 +34,23 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
         super.onCreate()
         createNotificationChannel()
         initFirebaseAppCheck()
+        disableFirestoreOfflinePersistence()
+    }
+
+    // ✅ إصلاح (إلغاء العمل بدون إنترنت نهائياً): Firestore Android SDK يُفعِّل
+    // Persistence (كاش القرص) افتراضياً بلا أي إعداد صريح — أي أن استدعاءات
+    // .get() قد تُعاد بصمت من نسخة محلية قديمة مخزَّنة حتى بدون اتصال فعلي
+    // بالإنترنت، خلافاً تماماً للمطلوب (كل البيانات يجب أن تعتمد على اتصال
+    // حي، بلا أي كاش أو بيانات محلية كبديل). MemoryCacheSettings تُبقي فقط
+    // كاشاً بالذاكرة لمدة الجلسة الحالية (لتفادي إعادة نفس القراءة أثناء نفس
+    // الشاشة) بلا أي إصرار (persistence) على القرص يبقى بعد إغلاق التطبيق أو
+    // بلا اتصال. يجب ضبطها مرة واحدة هنا قبل أي استخدام لـFirebaseFirestore
+    // بالتطبيق (FirestoreRepository ينشئ instance عبر getInstance() لاحقاً).
+    private fun disableFirestoreOfflinePersistence() {
+        val settings = FirebaseFirestoreSettings.Builder()
+            .setLocalCacheSettings(MemoryCacheSettings.newBuilder().build())
+            .build()
+        FirebaseFirestore.getInstance().firestoreSettings = settings
     }
 
     // ✅ إضافة (Audit المرحلة 3، بند 3.7 — الحل الجذري لمشكلة نقص المخزون

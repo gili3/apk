@@ -37,16 +37,30 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 //  فشل آخر).
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * ✅ إصلاح (تفاعل وهمي بلا إنترنت): فحص فوري (لمرة واحدة، بلا Flow) لحالة
+ * الاتصال الفعلية — يُستخدم قبل أي عملية كتابة حسّاسة (سلة/مفضلة/طلب/رفع
+ * إيصال) لرفض المحاولة فوراً برسالة واضحة، بدل تركها لـ Firestore الذي
+ * يكتب أي set()/update()/delete() إلى الكاش المحلي فوراً ويُبقيها "معلّقة"
+ * صامتة (لا نجاح حقيقي ولا فشل ظاهر) حتى تعود الشبكة — وهو تحديداً سبب
+ * شعور المستخدم أن الإضافة "نجحت" فعلاً بلا إنترنت. لا يغني هذا عن
+ * NoInternetBanner (تنبيه دائم) بل يمنع تحديداً كل عملية كتابة من
+ * الاستمرار بصمت أثناء الانقطاع.
+ */
+fun isDeviceOnline(context: Context): Boolean {
+    val connectivityManager =
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+    val network = connectivityManager.activeNetwork ?: return false
+    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+}
+
 /** يرجع Flow<Boolean> يصدر true/false كلما تغيّرت حالة الاتصال الفعلية بالشبكة (لا مجرد "مسجَّل بشبكة" بل بها إنترنت فعلي قابل للتحقق) */
 fun Context.observeIsOnline(): Flow<Boolean> = callbackFlow {
     val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    fun currentlyOnline(): Boolean {
-        val network = connectivityManager.activeNetwork ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
+    fun currentlyOnline(): Boolean = isDeviceOnline(this@observeIsOnline)
 
     val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) { trySend(currentlyOnline()) }

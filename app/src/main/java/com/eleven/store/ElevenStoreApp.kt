@@ -30,8 +30,17 @@ import com.google.firebase.initialize
 // ═══════════════════════════════════════════════════════════════
 class ElevenStoreApp : Application(), ImageLoaderFactory {
 
+    companion object {
+        // ✅ جديد: يتيح لـ FirestoreRepository (ليس Composable ولا يملك Context خاصاً
+        // به) فحص الاتصال الفعلي عبر isDeviceOnline() قبل أي كتابة حسّاسة، بلا
+        // حاجة لتمرير Context عبر كل استدعاء أو تحويل MainViewModel إلى AndroidViewModel.
+        lateinit var appContext: Context
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        appContext = applicationContext
         createNotificationChannel()
         initFirebaseAppCheck()
         configureFirestoreCache()

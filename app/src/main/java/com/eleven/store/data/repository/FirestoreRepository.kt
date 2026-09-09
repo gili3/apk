@@ -82,6 +82,21 @@ class FirestoreRepository {
         if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
         else "تعذّر تحميل المنتجات، حاول مرة أخرى"
 
+    // ✅ إصلاح (تفاعل وهمي بلا إنترنت — سلة/مفضلة/طلب تبدو ناجحة بلا نت):
+    // set()/update()/delete()/transaction على Firestore لا تفشل فوراً بلا
+    // اتصال؛ فبفضل الكاش الدائم (configureFirestoreCache) تُكتب محلياً وتبقى
+    // "معلّقة" بصمت بانتظار عودة الشبكة — لا رسالة خطأ، والمستمعون اللحظيون
+    // (observeCart/observeFavorites) يعكسون التغيير محلياً فوراً فيبدو وكأن
+    // العملية نجحت فعلياً. requireOnline() يفحص الاتصال الحقيقي (مُتحقَّق
+    // عبر NET_CAPABILITY_VALIDATED، لا مجرد "مسجَّل بشبكة") *قبل* أي محاولة
+    // كتابة حسّاسة، ويرفضها فوراً برسالة واضحة بدل تركها معلّقة حتى خطوة
+    // لاحقة (كرفع صورة الإيصال) تحتاج شبكة فعلية فتكشف الانقطاع متأخرة جداً.
+    private fun requireOnline() {
+        if (!com.eleven.store.util.isDeviceOnline(com.eleven.store.ElevenStoreApp.appContext)) {
+            throw IOException("لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى")
+        }
+    }
+
     // ✅ جديد (Pagination/Infinite Scroll): قناة جانبية تحمل معلومات الصفحة
     // التالية بعد كل استدعاء لـgetProducts — بنفس أسلوب lastProductsError
     // أعلاه بدل تغيير توقيع الدالة (تفادياً لكسر الاستدعاءات الحالية
@@ -216,6 +231,7 @@ class FirestoreRepository {
     // ✅ يحدّث الاسم في Firebase Auth (displayName) ورقم الهاتف + الاسم في
     // وثيقة Firestore (users/{uid})، بنفس منطق التسجيل ومطابق لسلوك الموقع
     suspend fun updateUserProfile(name: String, phone: String) {
+        requireOnline()
         val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
 
         val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
@@ -395,6 +411,11 @@ class FirestoreRepository {
     }
 
     // ─── Banners ────────────────────────────────────────────────
+    // ✅ إصلاح: كان الفشل النهائي (بعد تجربة fallback) يُبلَع بصمت (emptyList)
+    // فيظهر البانر فارغاً دائماً بلا أي تمييز بين "لا توجد بانرات فعلاً" و"فشل
+    // تحميل حقيقي (شبكة/سيرفر)" — نفس إصلاح getFavoriteProducts أعلاه، يُرفَع
+    // الاستثناء الآن للمستدعي (loadBanners بـMainViewModel) ليعرض خطأ قابل
+    // لإعادة المحاولة بدل قسم بانر مختفٍ للأبد بصمت.
     suspend fun getBanners(): List<Banner> {
         return try {
             db.collection("banners")
@@ -412,13 +433,20 @@ class FirestoreRepository {
                     .documents.mapNotNull { doc ->
                         doc.toObject(Banner::class.java)?.copy(id = doc.id)
                     }.filter { it.isActive }
-            } catch (e2: Exception) { emptyList() }
+            } catch (e2: Exception) {
+                Log.e("FirestoreRepo", "getBanners failed: ${e2.message}", e2)
+                throw e2
+            }
         }
     }
+
 
     // ─── Categories ─────────────────────────────────────────────
     // مطابق تماماً لاستعلام getCategories في firestore-router.ts بالموقع:
     // فلترة isActive فقط بدون أي ترتيب إضافي (لا يوجد orderBy بالموقع)
+    // ✅ إصلاح: نفس نمط getFavoriteProducts/getBanners — الفشل كان يُبلَع
+    // (emptyList) فيبدو للمستخدم وكأن "لا توجد تصنيفات" حتى أثناء انقطاع
+    // الاتصال الفعلي. الآن يُرفَع الاستثناء ليتعامل معه loadCategoriesAndBrands.
     suspend fun getCategories(): List<Category> {
         return try {
             db.collection("categories")
@@ -427,7 +455,10 @@ class FirestoreRepository {
                 .documents.mapNotNull { doc ->
                     doc.toObject(Category::class.java)?.copy(id = doc.id)
                 }
-        } catch (e: Exception) { emptyList() }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getCategories failed: ${e.message}", e)
+            throw e
+        }
     }
 
     // ─── Brands ─────────────────────────────────────────────────
@@ -438,8 +469,12 @@ class FirestoreRepository {
                 .documents.mapNotNull { doc ->
                     doc.toObject(Brand::class.java)?.copy(id = doc.id)
                 }.filter { it.isActive }
-        } catch (e: Exception) { emptyList() }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getBrands failed: ${e.message}", e)
+            throw e
+        }
     }
+
 
     // ─── Products ───────────────────────────────────────────────
     suspend fun getProducts(
@@ -653,6 +688,7 @@ class FirestoreRepository {
 
     // ✅ يتحقق من المخزون ولا يسمح بتجاوزه عند الإضافة للسلة (مطابق لمنطق السيرفر في الموقع)
     suspend fun addToCart(item: CartItem) {
+        requireOnline()
         val u = uid ?: return
         val cartRef = db.collection("users").document(u).collection("cart").document(item.productId)
         val productRef = db.collection("products").document(item.productId)
@@ -685,6 +721,7 @@ class FirestoreRepository {
     }
 
     suspend fun removeFromCart(productId: String) {
+        requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("cart").document(productId).delete().await()
     }
@@ -692,6 +729,7 @@ class FirestoreRepository {
     // ✅ تعديل الكمية من السلة فقط، مقيّداً بالكمية المتوفرة في المخزون
     // يعيد true إذا تم تقييد الكمية بحد المخزون (capped) — مطابق لاستجابة updateCartQuantity في الموقع
     suspend fun updateQuantity(productId: String, newQty: Int): Boolean {
+        requireOnline()
         val u = uid ?: return false
         val productSnap = db.collection("products").document(productId).get().await()
         val stock = productSnap.getLong("stock") ?: 0L
@@ -708,6 +746,7 @@ class FirestoreRepository {
     }
 
     suspend fun clearCart() {
+        requireOnline()
         val u = uid ?: return
         val batch = db.batch()
         val items = db.collection("users").document(u).collection("cart").get().await()
@@ -787,6 +826,7 @@ class FirestoreRepository {
     }
 
     suspend fun toggleFavorite(productId: String): Boolean {
+        requireOnline()
         val u = uid ?: return false
         val ref = db.collection("users").document(u).collection("favorites").document(productId)
         val doc = ref.get().await()
@@ -801,16 +841,23 @@ class FirestoreRepository {
     }
 
     // ─── Addresses ──────────────────────────────────────────────
+    // ✅ إصلاح: نفس النمط أعلاه — كان الفشل يُبلَع (emptyList) فيظهر للمستخدم
+    // "لا توجد عناوين محفوظة" حتى لو كان السبب فعلياً انقطاع اتصال، فيضطر
+    // لإعادة إدخال عنوانه بالكامل ظناً أنه لم يُحفَظ من الأساس.
     suspend fun getAddresses(): List<Address> {
         val u = uid ?: return emptyList()
         return try {
             db.collection("users").document(u).collection("addresses")
                 .get().await()
                 .documents.mapNotNull { it.toObject(Address::class.java)?.copy(id = it.id) }
-        } catch (e: Exception) { emptyList() }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getAddresses failed: ${e.message}", e)
+            throw e
+        }
     }
 
     suspend fun addAddress(address: Address): String {
+        requireOnline()
         val u = uid ?: return ""
         val ref = db.collection("users").document(u).collection("addresses").document()
         ref.set(address).await()
@@ -818,11 +865,13 @@ class FirestoreRepository {
     }
 
     suspend fun updateAddress(addressId: String, address: Address) {
+        requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("addresses").document(addressId).set(address).await()
     }
 
     suspend fun deleteAddress(addressId: String) {
+        requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("addresses").document(addressId).delete().await()
     }
@@ -835,6 +884,7 @@ class FirestoreRepository {
     // https://eleven-sd.com/admin/1000314108 بدل صورة الإيصال الفعلية من
     // Firebase Storage. الآن نرفع الصورة فعلياً ونعيد رابط تنزيل حقيقي وصالح.
     suspend fun uploadPaymentReceipt(context: Context, uri: Uri): String {
+        requireOnline()
         val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لرفع إيصال الدفع")
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("تعذر قراءة صورة الإيصال المختارة")
@@ -926,6 +976,7 @@ class FirestoreRepository {
     }
 
     suspend fun placeOrder(order: Order, couponCode: String? = null): String {
+        requireOnline()
         val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
         val ref = db.collection("orders").document()
         val verificationToken = java.util.UUID.randomUUID().toString().replace("-", "").take(26)
@@ -1092,7 +1143,14 @@ class FirestoreRepository {
     // يتأثر بهذه الكتابة مباشرة — يُسوّى ذرّياً بواسطة Cloud Function مستقلة
     // (notificationCounterTrigger.ts) تلاحظ هذه الكتابة نفسها بصرف النظر عن
     // مصدرها، فيبقى صحيحاً ومطابقاً لما يعرضه الموقع دون أي استدعاء إضافي هنا.
+    // ✅ إصلاح (نفس فئة مشكلة السلة/المفضلة بلا إنترنت): كانت هذه الدوال بلا
+    // requireOnline() — الـ optimistic update بالـ ViewModel (تحديث القائمة
+    // محلياً فوراً + تراجع عند catch) يعتمد على أن الكتابة *تفشل* بوضوح لو
+    // بلا اتصال، لكن Firestore لا يفشل فوراً بلا نت (يُبقي الكتابة معلّقة
+    // بصمت بانتظار عودة الشبكة) — فلا يُستدعى catch أصلاً، ويبقى الإشعار
+    // "مقروء"/"محذوف" محلياً للأبد دون أن يتزامن فعلياً مع الخادم.
     suspend fun markNotificationRead(notifId: String) {
+        requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("notifications")
             .document(notifId)
@@ -1101,6 +1159,7 @@ class FirestoreRepository {
     }
 
     suspend fun markAllNotificationsRead() {
+        requireOnline()
         val u = uid ?: return
         val unread = db.collection("users").document(u).collection("notifications")
             .whereEqualTo("isRead", false)
@@ -1113,6 +1172,7 @@ class FirestoreRepository {
     }
 
     suspend fun deleteNotification(notifId: String) {
+        requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("notifications")
             .document(notifId).delete().await()
@@ -1121,6 +1181,7 @@ class FirestoreRepository {
     // حذف كل إشعارات المستخدم دفعة واحدة (زر "حذف الكل") — نفس السلوك
     // المتاح في نسخة الموقع (deleteAllNotifications بالسيرفر).
     suspend fun deleteAllNotifications() {
+        requireOnline()
         val u = uid ?: return
         val all = db.collection("users").document(u).collection("notifications")
             .get().await()

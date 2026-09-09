@@ -131,11 +131,25 @@ class MainViewModel : ViewModel() {
     private val _banners = MutableStateFlow<List<Banner>>(emptyList())
     val banners: StateFlow<List<Banner>> = _banners
 
+    // ✅ جديد: حالة تحميل/خطأ خاصة بالبانر وحده (راجع loadHomeData أدناه) —
+    // بانر بطيء أو فاشل لم يعد يمنع ظهور التصنيفات/المنتجات، ولا العكس.
+    private val _bannersLoading = MutableStateFlow(true)
+    val bannersLoading: StateFlow<Boolean> = _bannersLoading
+    private val _bannersError = MutableStateFlow<String?>(null)
+    val bannersError: StateFlow<String?> = _bannersError
+
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories
 
     private val _brands = MutableStateFlow<List<Brand>>(emptyList())
     val brands: StateFlow<List<Brand>> = _brands
+
+    // ✅ جديد: التصنيفات والعلامات التجارية تُحمَّلان معاً (نفس الفئة من
+    // البيانات: فلاتر/تصنيف) لكن بحالة مستقلة تماماً عن البانر والمنتجات.
+    private val _categoriesLoading = MutableStateFlow(true)
+    val categoriesLoading: StateFlow<Boolean> = _categoriesLoading
+    private val _categoriesError = MutableStateFlow<String?>(null)
+    val categoriesError: StateFlow<String?> = _categoriesError
 
     // ─── Products ───────────────────────────────────────────────
     private val _featuredProducts = MutableStateFlow<List<Product>>(emptyList())
@@ -149,6 +163,13 @@ class MainViewModel : ViewModel() {
 
     private val _onSaleProducts = MutableStateFlow<List<Product>>(emptyList())
     val onSaleProducts: StateFlow<List<Product>> = _onSaleProducts
+
+    // ✅ جديد: حالة تحميل/خطأ مستقلة لأقسام منتجات الرئيسية الأربعة معاً
+    // (مميزة/جديدة/الأكثر مبيعاً/عروض) — منفصلة عن البانر والتصنيفات تماماً.
+    private val _homeProductsLoading = MutableStateFlow(true)
+    val homeProductsLoading: StateFlow<Boolean> = _homeProductsLoading
+    private val _homeProductsError = MutableStateFlow<String?>(null)
+    val homeProductsError: StateFlow<String?> = _homeProductsError
 
     private val _allProducts = MutableStateFlow<List<Product>>(emptyList())
     val allProducts: StateFlow<List<Product>> = _allProducts
@@ -283,6 +304,14 @@ class MainViewModel : ViewModel() {
     private val _addresses = MutableStateFlow<List<Address>>(emptyList())
     val addresses: StateFlow<List<Address>> = _addresses
 
+    // ✅ جديد: getAddresses لم تعد تبلع الفشل بصمت (راجع الإصلاح بـ
+    // FirestoreRepository) — هذه القناة تنقل رسالة الخطأ الودّية للشاشة
+    // لعرضها (Snackbar) بدل ترك قائمة العناوين تبدو "فارغة فعلاً" أثناء فشل
+    // مؤقت، ما قد يدفع المستخدم لإدخال عنوانه من جديد ظناً أنه لم يُحفَظ.
+    private val _addressesError = MutableStateFlow<String?>(null)
+    val addressesError: StateFlow<String?> = _addressesError
+    fun consumeAddressesError() { _addressesError.value = null }
+
     // ─── Notifications ──────────────────────────────────────────
     private val _notifications = MutableStateFlow<List<NotificationItem>>(emptyList())
     val notifications: StateFlow<List<NotificationItem>> = _notifications
@@ -316,38 +345,71 @@ class MainViewModel : ViewModel() {
     // ─── Init ───────────────────────────────────────────────────
     init { loadHomeData() }
 
+    // ✅ إعادة تصميم (بناءً على طلب مباشر): كانت كل بيانات الرئيسية الثمانية
+    // (إعدادات المتجر/بانر/تصنيفات/علامات/4 أقسام منتجات) تُطلَق بالتوازي
+    // فعلاً (async{}) لكن تُقرأ (await) بالتسلسل داخل try/catch واحد مشترك —
+    // فإذا فشل أي طلب مبكّر بالترتيب (مثلاً البانر)، تُرمى استثناءً *قبل*
+    // الوصول لقراءة نتيجة أقسام لاحقة كانت قد نجحت فعلياً بالتوازي، فتُهدَر
+    // بياناتها وتظهر الرئيسية شبه فارغة رغم نجاح أغلب الطلبات. الآن: 3 عمليات
+    // تحميل مستقلة تماماً (بانر / تصنيفات+علامات / منتجات)، كل منها بحالة
+    // تحميل وخطأ خاصة به وتُعاد محاولتها بمفردها — فشل قسم واحد أو بطؤه لا
+    // يؤخر ولا يُخفي الأقسام الأخرى الناجحة.
     fun loadHomeData() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
-            try {
-                val settingsDeferred    = async { repo.getStoreSettings() }
-                val bannersDeferred     = async { repo.getBanners() }
-                val categoriesDeferred  = async { repo.getCategories() }
-                val brandsDeferred      = async { repo.getBrands() }
-                val featuredDeferred    = async { repo.getProducts(isFeatured   = true, limit = 10) }
-                val newDeferred         = async { repo.getProducts(isNew        = true, limit = 10) }
-                val bestDeferred        = async { repo.getProducts(isBestSeller = true, limit = 10) }
-                val onSaleDeferred      = async { repo.getProducts(onSale       = true, limit = 10) }
+        viewModelScope.launch { repo.getStoreSettings().let { _storeSettings.value = it } }
+        loadBanners()
+        loadCategoriesAndBrands()
+        loadHomeProducts()
+    }
 
-                _storeSettings.value    = settingsDeferred.await()
-                _banners.value          = bannersDeferred.await()
-                _categories.value       = categoriesDeferred.await()
-                _brands.value           = brandsDeferred.await()
+    fun loadBanners() {
+        viewModelScope.launch {
+            _bannersLoading.value = true
+            _bannersError.value = null
+            try {
+                _banners.value = repo.getBanners()
+            } catch (e: Exception) {
+                _bannersError.value = repo.friendlyLoadError(e)
+            } finally {
+                _bannersLoading.value = false
+            }
+        }
+    }
+
+    fun loadCategoriesAndBrands() {
+        viewModelScope.launch {
+            _categoriesLoading.value = true
+            _categoriesError.value = null
+            try {
+                val categoriesDeferred = async { repo.getCategories() }
+                val brandsDeferred = async { repo.getBrands() }
+                _categories.value = categoriesDeferred.await()
+                _brands.value = brandsDeferred.await()
+            } catch (e: Exception) {
+                _categoriesError.value = repo.friendlyLoadError(e)
+            } finally {
+                _categoriesLoading.value = false
+            }
+        }
+    }
+
+    fun loadHomeProducts() {
+        viewModelScope.launch {
+            _homeProductsLoading.value = true
+            _homeProductsError.value = null
+            try {
+                val featuredDeferred = async { repo.getProducts(isFeatured   = true, limit = 10) }
+                val newDeferred      = async { repo.getProducts(isNew        = true, limit = 10) }
+                val bestDeferred     = async { repo.getProducts(isBestSeller = true, limit = 10) }
+                val onSaleDeferred   = async { repo.getProducts(onSale       = true, limit = 10) }
                 // إخفاء المنتجات منتهية الكمية من جميع أقسام الصفحة الرئيسية
                 _featuredProducts.value = featuredDeferred.await().filter { it.stock > 0 }
                 _newArrivals.value      = newDeferred.await().filter { it.stock > 0 }
                 _bestSellers.value      = bestDeferred.await().filter { it.stock > 0 }
                 _onSaleProducts.value   = onSaleDeferred.await().filter { it.stock > 0 }
             } catch (e: Exception) {
-                // ✅ إصلاح: كانت e.message تُعرَض للمستخدم كما هي (نص استثناء
-                // تقني خام، وأحياناً فارغة تماماً)، بلا أي تفريق بين انقطاع
-                // الاتصال وأي فشل آخر — نفس الإصلاح المطبَّق بـ FirestoreRepository
-                // .getProducts، هنا أيضاً حتى لا تظهر شاشة رئيسية فارغة برسالة
-                // غامضة عند انقطاع الاتصال تحديداً.
-                _error.value = repo.friendlyLoadError(e)
+                _homeProductsError.value = repo.friendlyLoadError(e)
             } finally {
-                _isLoading.value = false
+                _homeProductsLoading.value = false
             }
         }
     }
@@ -571,7 +633,13 @@ class MainViewModel : ViewModel() {
     }
 
     fun loadAddresses() {
-        viewModelScope.launch { _addresses.value = repo.getAddresses() }
+        viewModelScope.launch {
+            try {
+                _addresses.value = repo.getAddresses()
+            } catch (e: Exception) {
+                _addressesError.value = repo.friendlyLoadError(e)
+            }
+        }
     }
 
     fun addAddress(address: Address, onDone: () -> Unit) {

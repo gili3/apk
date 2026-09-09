@@ -72,19 +72,30 @@ fun HomeScreen(
     onOpenLink: (String) -> Unit = {},
 ) {
     val banners by viewModel.banners.collectAsStateWithLifecycle()
+    val bannersLoading by viewModel.bannersLoading.collectAsStateWithLifecycle()
+    val bannersError by viewModel.bannersError.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val categoriesLoading by viewModel.categoriesLoading.collectAsStateWithLifecycle()
+    val categoriesError by viewModel.categoriesError.collectAsStateWithLifecycle()
     val featuredProducts by viewModel.featuredProducts.collectAsStateWithLifecycle()
     val newArrivals by viewModel.newArrivals.collectAsStateWithLifecycle()
     val bestSellers by viewModel.bestSellers.collectAsStateWithLifecycle()
     val onSaleProducts by viewModel.onSaleProducts.collectAsStateWithLifecycle()
+    val homeProductsLoading by viewModel.homeProductsLoading.collectAsStateWithLifecycle()
+    val homeProductsError by viewModel.homeProductsError.collectAsStateWithLifecycle()
     val brands by viewModel.brands.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
-    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
-    // ✅ إصلاح: يميّز "فشل تحميل الصفحة الرئيسية فعلياً" عن حالة عادية طبيعية
-    val loadError by viewModel.error.collectAsStateWithLifecycle()
+    // ✅ إعادة تصميم: لم تعد هناك حالة تحميل/خطأ واحدة تغطي الصفحة كلها —
+    // كل قسم (بانر/تصنيفات/منتجات) مستقل تماماً (راجع loadHomeData بـ
+    // MainViewModel). "فشل تام" (تُعرَض معه شاشة الخطأ الكاملة) يعني فعلياً
+    // أن كل الأقسام الثلاثة فشلت معاً ولا يوجد أي محتوى ظاهر من قبل — أي فشل
+    // جزئي (قسم واحد فقط) يُعرَض كرسالة صغيرة داخل قسمه فقط، بينما تبقى بقية
+    // الصفحة تعمل بشكل طبيعي.
+    val isLoading = bannersLoading || categoriesLoading || homeProductsLoading
     val hasAnyContent = banners.isNotEmpty() || categories.isNotEmpty() ||
         featuredProducts.isNotEmpty() || newArrivals.isNotEmpty() ||
         bestSellers.isNotEmpty() || onSaleProducts.isNotEmpty()
+    val allSectionsFailed = bannersError != null && categoriesError != null && homeProductsError != null
 
     // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من بطاقات
     // الرئيسية (بعكس ProductDetailScreen) — المستخدم يضغط الزر بلا أي
@@ -108,7 +119,7 @@ fun HomeScreen(
         // ── فشل تحميل فعلي (شبكة/سيرفر) ولا يوجد أي محتوى معروض أصلاً ──
         // ✅ لو فيه محتوى مسبق (من تحميل سابق ناجح) لا نُخفيه بسبب فشل
         // مؤقت لاحق — نعرض التنبيه فقط لو الصفحة فارغة تماماً بسببه.
-        if (loadError != null && !hasAnyContent && !isLoading) {
+        if (allSectionsFailed && !hasAnyContent && !isLoading) {
             item {
                 Column(
                     modifier = Modifier
@@ -153,7 +164,7 @@ fun HomeScreen(
         item {
             BannerSlider(
                 banners = banners,
-                isLoading = isLoading,
+                isLoading = bannersLoading,
                 onShopClick = { onViewAllClick("") },
                 // ✅ إصلاح: كان زر/بانر البانر يتجاهل banner.link تماماً ويذهب
                 // دائماً لصفحة كل المنتجات، حتى لو كان الأدمن قد حدّد رابط منتج
@@ -161,6 +172,11 @@ fun HomeScreen(
                 // لا يفتح". الآن: رابط محدَّد → onOpenLink، وإلا → onShopClick.
                 onBannerLinkClick = { link -> onOpenLink(link) },
             )
+        }
+
+        // ── فشل جزئي: تصنيفات/علامات فقط (باقي الصفحة تعمل بشكل طبيعي) ──
+        if (categoriesError != null && categories.isEmpty() && !categoriesLoading) {
+            item { SectionErrorRetry(categoriesError!!) { viewModel.loadCategoriesAndBrands() } }
         }
 
         // ── 2. التصنيفات — أول 4 فقط ────────────────────────────
@@ -172,6 +188,14 @@ fun HomeScreen(
                     onCategoryClick = onCategoryClick,
                 )
             }
+        }
+
+        // ── فشل جزئي: أقسام المنتجات فقط (البانر/التصنيفات تعملان بشكل طبيعي) ──
+        if (homeProductsError != null && !homeProductsLoading &&
+            onSaleProducts.isEmpty() && featuredProducts.isEmpty() &&
+            bestSellers.isEmpty() && newArrivals.isEmpty()
+        ) {
+            item { SectionErrorRetry(homeProductsError!!) { viewModel.loadHomeProducts() } }
         }
 
         // ── 3. العروض والخصومات ─────────────────────────────────
@@ -242,6 +266,40 @@ fun HomeScreen(
         Box(modifier = Modifier.align(Alignment.BottomCenter)) {
             ElevenSnackbarHost(snackbarHostState)
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SECTION ERROR RETRY
+//  ✅ جديد: رسالة صغيرة داخل قسم واحد فقط (تصنيفات أو منتجات) عند فشل
+//  تحميله تحديداً، بينما بقية أقسام الصفحة (بانر مثلاً) تظهر بشكل طبيعي —
+//  تفادياً لإخفاء الصفحة كلها بسبب فشل قسم واحد فقط.
+// ══════════════════════════════════════════════════════════════
+@Composable
+private fun SectionErrorRetry(message: String, onRetry: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Neutral100)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.CloudOff, contentDescription = null, tint = MutedForeground, modifier = Modifier.size(20.dp))
+        Text(
+            message,
+            color = MutedForeground,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(start = 10.dp).weight(1f),
+        )
+        Text(
+            "إعادة المحاولة",
+            color = Accent,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            modifier = Modifier.clickable(onClick = onRetry),
+        )
     }
 }
 

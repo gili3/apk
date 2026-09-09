@@ -72,6 +72,7 @@ fun ProfileScreen(
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val addresses by viewModel.addresses.collectAsStateWithLifecycle()
+    val addressesError by viewModel.addressesError.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf<ProfileTab>(ProfileTab.INFO) }
     var showForm by remember { mutableStateOf(false) }
@@ -86,6 +87,14 @@ fun ProfileScreen(
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(user) { if (user != null) viewModel.loadAddresses() }
+    // ✅ إصلاح: نفس إصلاح CheckoutScreen — يعرض رسالة واضحة بدل قائمة عناوين
+    // فارغة صامتة عند فشل التحميل فعلياً (غير متاح بلا إنترنت مثلاً)
+    LaunchedEffect(addressesError) {
+        addressesError?.let {
+            snackbarHostState.showMessage(it, SnackbarType.ERROR)
+            viewModel.consumeAddressesError()
+        }
+    }
 
     // ── حالة عدم تسجيل الدخول ──
     if (user == null) {

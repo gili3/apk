@@ -139,6 +139,7 @@ fun CheckoutScreen(
     val cartItems by viewModel.cartItems.collectAsStateWithLifecycle()
     val cartTotal by viewModel.cartTotal.collectAsStateWithLifecycle()
     val addresses by viewModel.addresses.collectAsStateWithLifecycle()
+    val addressesError by viewModel.addressesError.collectAsStateWithLifecycle()
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
@@ -174,6 +175,13 @@ fun CheckoutScreen(
     ) { uri -> if (uri != null) receiptUri = uri }
 
     LaunchedEffect(Unit) { viewModel.loadAddresses() }
+    // ✅ إصلاح: يعرض رسالة الخطأ الآن (بدل قائمة عناوين فارغة صامتة عند فشل التحميل)
+    LaunchedEffect(addressesError) {
+        addressesError?.let {
+            snackbarHostState.showMessage(it, SnackbarType.ERROR)
+            viewModel.consumeAddressesError()
+        }
+    }
     LaunchedEffect(addresses) {
         if (addresses.isNotEmpty() && selectedAddress == null) {
             selectedAddress = addresses.firstOrNull { it.isDefault } ?: addresses.first()

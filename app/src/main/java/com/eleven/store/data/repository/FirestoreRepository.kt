@@ -498,7 +498,28 @@ class FirestoreRepository {
             // وُجد) لنعرضه بدل نص "لا نتائج" حين تكون النتيجة فارغة بسبب فشل
             // فعلي لا بسبب بحث لم يُطابق شيئاً.
             lastProductsError = page.error
-            return page.products
+            // ✅ إصلاح: كان يُعتمَد كلياً على أن فهرسة Algolia تستبعد المنتجات
+            // غير المتاحة (isActive=false، نفاد المخزون، أو حذف نهائي) — لكن
+            // مزامنة الفهرس (syncProductToIndex بالسيرفر) قد تتأخر أو تفشل،
+            // فيبقى منتج محذوف أو نافد المخزون ظاهراً في نتائج البحث رغم زوال
+            // سبب ظهوره. الآن نتحقق من كل نتيجة مقابل Firestore (مصدر الحقيقة)
+            // قبل عرضها للمستخدم، عبر نفس دفعة whereIn المستخدمة أصلاً للسلة
+            // والمفضلة (fetchProductSnapsByIds) بدل استعلام منفصل لكل منتج.
+            if (page.products.isEmpty()) return page.products
+            return try {
+                val liveSnaps = fetchProductSnapsByIds(page.products.map { it.id })
+                page.products.filter { p ->
+                    val snap = liveSnaps[p.id] ?: return@filter false // محذوف نهائياً من قاعدة البيانات
+                    val isActive = snap.getBoolean("isActive") ?: true
+                    val stock = snap.getLong("stock") ?: 0L
+                    isActive && stock > 0
+                }
+            } catch (e: Exception) {
+                // فشل التحقق نفسه (شبكة، مهلة...) لا يجب أن يُسقط نتائج بحث
+                // صحيحة أصلاً — نعرضها كما هي بدل تحويل فشل شبكي بسيط في خطوة
+                // تحقق إضافية إلى فشل بحث كامل غير مبرَّر للمستخدم.
+                page.products
+            }
         }
 
         return try {

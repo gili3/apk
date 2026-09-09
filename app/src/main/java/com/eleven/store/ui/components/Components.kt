@@ -126,7 +126,10 @@ fun ProductCard(
                         Text("مميز", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                // أيقونة المفضلة — شفافة الخلفية، أعلى يسار الصورة (top-2 left-2 في الموقع)
+                // أيقونة المفضلة — أعلى يسار الصورة (top-2 left-2 في الموقع)
+                // ✅ إصلاح: القلب غير المفضَّل كان أبيض شفاف، فيختفي تماماً فوق
+                // صور المنتجات ذات الخلفية البيضاء/الفاتحة. أصبح الآن أسود شفافاً
+                // بدل الأبيض الشفاف، بلا أي خلفية إضافية خلف الأيقونة.
                 IconButton(
                     onClick = onFavoriteToggle,
                     modifier = Modifier
@@ -137,7 +140,7 @@ fun ProductCard(
                     Icon(
                         imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                         contentDescription = null,
-                        tint = if (isFavorite) Destructive else Color.White,
+                        tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.6f),
                         modifier = Modifier.size(22.dp), // مطابق لـ w-5 h-5 مع تكبير طفيف
                     )
                 }

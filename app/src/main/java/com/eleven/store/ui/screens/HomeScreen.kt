@@ -41,6 +41,9 @@ import com.eleven.store.data.model.Banner
 import com.eleven.store.data.model.Brand
 import com.eleven.store.data.model.Category
 import com.eleven.store.data.model.Product
+import com.eleven.store.ui.components.ElevenSnackbarHost
+import com.eleven.store.ui.components.SnackbarType
+import com.eleven.store.ui.components.showMessage
 import com.eleven.store.ui.theme.Accent
 import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
@@ -49,6 +52,7 @@ import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.theme.Neutral300
 import com.eleven.store.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
 //  HOME SCREEN — نسخة طبق الأصل من Home.tsx في الموقع
@@ -82,6 +86,19 @@ fun HomeScreen(
         featuredProducts.isNotEmpty() || newArrivals.isNotEmpty() ||
         bestSellers.isNotEmpty() || onSaleProducts.isNotEmpty()
 
+    // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من بطاقات
+    // الرئيسية (بعكس ProductDetailScreen) — المستخدم يضغط الزر بلا أي
+    // تغذية راجعة تؤكد نجاح الإضافة فعلياً.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    fun confirmAddedToCart(product: Product) {
+        viewModel.addToCart(product)
+        coroutineScope.launch {
+            snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -166,7 +183,7 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { viewModel.addToCart(it) },
+                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -180,7 +197,7 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { viewModel.addToCart(it) },
+                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -194,7 +211,7 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { viewModel.addToCart(it) },
+                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -208,7 +225,7 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { viewModel.addToCart(it) },
+                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -220,6 +237,10 @@ fun HomeScreen(
                 BrandsRow(brands = brands.take(3))
                 Spacer(Modifier.height(8.dp))
             }
+        }
+    }
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            ElevenSnackbarHost(snackbarHostState)
         }
     }
 }
@@ -662,7 +683,9 @@ private fun HomeProductCard(
                     }
                 }
 
-                // زر مفضلة — شفاف الخلفية، أعلى يسار (top-2 left-2) — موحّد مع ProductCard
+                // زر مفضلة — أعلى يسار (top-2 left-2) — موحّد مع ProductCard
+                // ✅ إصلاح: القلب غير المفضَّل أسود شفاف بدل الأبيض الشفاف (كان
+                // يختفي فوق صور المنتجات ذات الخلفية البيضاء/الفاتحة).
                 IconButton(
                     onClick = onFavoriteToggle,
                     modifier = Modifier
@@ -673,7 +696,7 @@ private fun HomeProductCard(
                     Icon(
                         imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                         contentDescription = null,
-                        tint = if (isFavorite) Destructive else Color.White,
+                        tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.6f),
                         modifier = Modifier.size(22.dp),
                     )
                 }

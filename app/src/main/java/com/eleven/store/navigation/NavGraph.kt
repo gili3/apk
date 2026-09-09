@@ -187,6 +187,8 @@ fun ElevenNavGraph(
                 onBack = { navController.popBackStack() },
                 onCheckout = { navController.navigate(Route.CHECKOUT) },
                 onProductClick = { navController.navigate(Route.productDetail(it)) },
+                // ✅ إصلاح: "تسوق الآن" بسلة فارغة ينتقل لشاشة المنتجات فعلياً
+                onGoToProducts = { navController.navigate(Route.PRODUCTS) },
             )
         }
 

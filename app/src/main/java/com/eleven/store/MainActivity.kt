@@ -429,8 +429,11 @@ fun ElevenHeader(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
                             .focusRequester(focusRequester),
+                        // ✅ إصلاح: height(46.dp) كان أصغر من الحد الأدنى الطبيعي
+                        // لصندوق OutlinedTextField (~56dp)، فيقص الحقل ويُظهر نصفه
+                        // فقط بدل عرضه كاملاً. الآن نتحكم بالارتفاع عبر
+                        // minHeight/padding داخلي بدل فرض ارتفاع أصغر من اللازم.
                         singleLine = true,
                         shape = RoundedCornerShape(8.dp),
                         textStyle = androidx.compose.ui.text.TextStyle(

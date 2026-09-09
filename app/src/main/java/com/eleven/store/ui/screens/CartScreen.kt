@@ -67,6 +67,10 @@ fun CartScreen(
     onBack: () -> Unit,
     onCheckout: () -> Unit,
     onProductClick: (String) -> Unit,
+    // ✅ إصلاح: زر "تسوق الآن" (سلة فارغة) كان يستدعي onProductClick("") —
+    // ينتقل لصفحة تفاصيل منتج بمعرّف فارغ بدل صفحة المنتجات نفسها. أضيف
+    // callback مستقل للانتقال الصحيح إلى شاشة المنتجات (راجع NavGraph.kt).
+    onGoToProducts: () -> Unit = { onProductClick("") },
 ) {
     val cartItems by viewModel.cartItems.collectAsStateWithLifecycle()
     val cartError by viewModel.cartError.collectAsStateWithLifecycle()
@@ -457,7 +461,7 @@ fun CartScreen(
                     Spacer(Modifier.height(28.dp))
                     ElevenButton(
                         text = "تسوق الآن",
-                        onClick = { onProductClick("") },
+                        onClick = onGoToProducts,
                         modifier = Modifier
                             .height(48.dp)
                             .padding(horizontal = 32.dp),

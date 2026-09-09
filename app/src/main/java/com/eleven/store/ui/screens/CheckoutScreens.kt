@@ -141,6 +141,7 @@ fun CheckoutScreen(
     val addresses by viewModel.addresses.collectAsStateWithLifecycle()
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
+    val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
 
     // ✅ مصدر العناصر: buyNowItems أو السلة — مطابق للموقع
     val orderItems = if (buyNowItems.isNotEmpty()) buyNowItems else cartItems
@@ -251,6 +252,10 @@ fun CheckoutScreen(
                                 // يفتح الآن نفس نموذج إضافة العنوان المستخدم بشاشة "حسابي"
                                 // مباشرة داخل شاشة الدفع (مطابق لسلوك AddressStep بالموقع).
                                 onAddAddress = { address, onDone -> viewModel.addAddress(address, onDone) },
+                                // ✅ توحيد البيانات: عنوان جديد من شاشة الدفع يبدأ ببيانات
+                                // الملف الشخصي أيضاً، بنفس منطق شاشة "حسابي".
+                                defaultFullName = (userProfile?.name?.ifBlank { null } ?: user?.displayName) ?: "",
+                                defaultPhone = userProfile?.phone ?: "",
                             )
                             2 -> PaymentStepContent(
                                 storeSettings = storeSettings,
@@ -338,6 +343,8 @@ private fun AddressStepContent(
     onSelect: (Address) -> Unit,
     onNext: () -> Unit,
     onAddAddress: (Address, () -> Unit) -> Unit,
+    defaultFullName: String = "",
+    defaultPhone: String = "",
 ) {
     // ✅ إصلاح: حالة عرض نموذج إضافة عنوان مباشرة داخل شاشة الدفع
     var showAddDialog by remember { mutableStateOf(false) }
@@ -347,6 +354,8 @@ private fun AddressStepContent(
         Dialog(onDismissRequest = { if (!isSaving) showAddDialog = false }) {
             AddressFormCard(
                 initial = null,
+                defaultFullName = defaultFullName,
+                defaultPhone = defaultPhone,
                 onSave = { fullName, phone, city, address, isDefault ->
                     isSaving = true
                     onAddAddress(

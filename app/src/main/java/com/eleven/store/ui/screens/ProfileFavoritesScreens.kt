@@ -23,6 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -315,9 +317,15 @@ fun ProfileScreen(
                                 Spacer(Modifier.height(12.dp))
                                 OutlinedTextField(
                                     value = editPhone,
-                                    onValueChange = { editPhone = it },
+                                    // ✅ إصلاح: يقبل الأرقام فقط (مع علامة + اختيارية بالبداية
+                                    // لمفتاح الدولة)، ويمنع أي حرف أو رمز آخر عبر الفلترة هنا
+                                    // (لوحة المفاتيح الرقمية وحدها لا تمنع اللصق بأحرف).
+                                    onValueChange = { v ->
+                                        editPhone = v.filterIndexed { i, c -> c.isDigit() || (c == '+' && i == 0) }
+                                    },
                                     label = { Text("رقم الهاتف") },
                                     singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 Spacer(Modifier.height(4.dp))
@@ -515,6 +523,9 @@ fun ProfileScreen(
                     item {
                         AddressFormCard(
                             initial = editingAddress,
+                            // ✅ توحيد البيانات: عنوان جديد يبدأ ببيانات الملف الشخصي
+                            defaultFullName = (userProfile?.name?.ifBlank { null } ?: user?.displayName) ?: "",
+                            defaultPhone = userProfile?.phone ?: "",
                             onSave = { fullName, phone, city, address, isDefault ->
                                 val newAddress = Address(
                                     fullName = fullName,
@@ -629,6 +640,13 @@ fun AddressFormCard(
     initial: Address?,
     onSave: (fullName: String, phone: String, city: String, address: String, isDefault: Boolean) -> Unit,
     onCancel: () -> Unit,
+    // ✅ إصلاح: توحيد حقلي الاسم والهاتف بين الملف الشخصي والعنوان — عنوان
+    // جديد يُعبَّأ مسبقاً ببيانات الملف الشخصي بدل تكرار كتابتها من الصفر
+    // (وبدل بقائها فارغة فتختلف عرضاً عن بيانات الملف الشخصي). عنوان قائم
+    // بالفعل (initial != null) يحتفظ ببياناته الخاصة كما هي، لأن عنوان
+    // الشحن قد يكون لمستلم مختلف عمداً.
+    defaultFullName: String = "",
+    defaultPhone: String = "",
 ) {
     // ✅ إصلاح: قائمة العناوين تبقى ظاهرة مع أزرار "تعديل" الخاصة بها حتى أثناء
     // فتح هذا النموذج (انظر مكان الاستدعاء بـProfileScreen) — لو ضغط المستخدم
@@ -639,8 +657,8 @@ fun AddressFormCard(
     // بأخرى. ربط remember بمعرّف العنوان (initial?.id) يعيد تهيئة الحقول بمجرد
     // تغيّر هدف التعديل.
     val formKey = initial?.id ?: "new"
-    var fullName by remember(formKey) { mutableStateOf(initial?.fullName ?: "") }
-    var phone by remember(formKey) { mutableStateOf(initial?.phone ?: "") }
+    var fullName by remember(formKey) { mutableStateOf(initial?.fullName ?: defaultFullName) }
+    var phone by remember(formKey) { mutableStateOf(initial?.phone ?: defaultPhone) }
     var city by remember(formKey) { mutableStateOf(initial?.city ?: "") }
     var address by remember(formKey) { mutableStateOf(initial?.address ?: "") }
     var isDefault by remember(formKey) { mutableStateOf(initial?.isDefault ?: false) }
@@ -679,7 +697,9 @@ fun AddressFormCard(
                         onValueChange = { v ->
                             when (key) {
                                 "fullName" -> fullName = v
-                                "phone" -> phone = v
+                                // ✅ إصلاح: رقم الهاتف يقبل أرقاماً فقط (مع + اختيارية بالبداية
+                                // لمفتاح الدولة) — يمنع إدخال أحرف/رموز غير مطلوبة.
+                                "phone" -> phone = v.filterIndexed { i, c -> c.isDigit() || (c == '+' && i == 0) }
                                 "city" -> city = v
                                 "address" -> address = v
                             }
@@ -688,6 +708,9 @@ fun AddressFormCard(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(8.dp),
+                        keyboardOptions = if (key == "phone")
+                            KeyboardOptions(keyboardType = KeyboardType.Phone)
+                        else KeyboardOptions.Default,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Accent,
                             unfocusedBorderColor = Border,

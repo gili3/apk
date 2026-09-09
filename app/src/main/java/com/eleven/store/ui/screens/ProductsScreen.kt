@@ -31,12 +31,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.eleven.store.data.model.Product
+import com.eleven.store.ui.components.ElevenSnackbarHost
+import com.eleven.store.ui.components.SnackbarType
+import com.eleven.store.ui.components.showMessage
 import com.eleven.store.ui.theme.Accent
 import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
 import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
 //  PRODUCTS SCREEN — نسخة طبق الأصل من صفحة Products.tsx بالموقع
@@ -74,6 +78,12 @@ fun ProductsScreen(
     }
     var selectedBrand by rememberSaveable(initialFilter) { mutableStateOf("all") }
     var searchQuery by rememberSaveable(initialSearch) { mutableStateOf(initialSearch) }
+
+    // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من هذه الشاشة
+    // (بعكس ProductDetailScreen) — المستخدم يضغط الزر بلا أي تغذية راجعة
+    // تؤكد نجاح الإضافة فعلياً.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     // ✅ دالة إعادة تحميل موحّدة — تُستخدم في LaunchedEffect وأيضاً بزر
     // "إعادة المحاولة" عند فشل التحميل، بدل تكرار نفس المعاملات مرتين
@@ -427,7 +437,8 @@ fun ProductsScreen(
 
                 HorizontalDivider(color = Border, thickness = 1.dp)
             }
-        }
+        },
+        snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             when {
@@ -567,7 +578,12 @@ fun ProductsScreen(
                                 product = product,
                                 isFavorite = product.id in favoriteIds,
                                 onFavoriteToggle = { viewModel.toggleFavorite(product.id) },
-                                onAddToCart = { viewModel.addToCart(product) },
+                                onAddToCart = {
+                                    viewModel.addToCart(product)
+                                    coroutineScope.launch {
+                                        snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+                                    }
+                                },
                                 onClick = { onProductClick(product.id) },
                             )
                         }

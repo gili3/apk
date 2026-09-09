@@ -854,6 +854,7 @@ private fun ForgotPasswordContent(
 @Composable
 private fun VerifyEmailSentContent(
     email: String,
+    sendFailed: Boolean = false,
     viewModel: MainViewModel,
     onGoToLogin: () -> Unit,
 ) {
@@ -891,12 +892,29 @@ private fun VerifyEmailSentContent(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "أرسلنا رابط تأكيد إلى${if (email.isNotBlank()) " $email" else " بريدك الإلكتروني"}. افتح الرابط لتأكيد حسابك، ثم سجّل الدخول.",
+                        if (sendFailed)
+                            "تم إنشاء حسابك بنجاح، لكن تعذّر إرسال رابط التأكيد الآن."
+                        else
+                            "أرسلنا رابط تأكيد إلى${if (email.isNotBlank()) " $email" else " بريدك الإلكتروني"}. افتح الرابط لتأكيد حسابك، ثم سجّل الدخول.",
                         color = MutedForeground,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    // ✅ جديد: بدل ما نسكت تماماً عن فشل الإرسال، نوضّح أن محاولة
+                    // تسجيل الدخول ستعيد إرسال الرابط تلقائياً (loginWithEmail
+                    // بالفعل تفعل هذا لأي حساب غير مؤكَّد) — معلومة صحيحة
+                    // وقابلة للتنفيذ بدل رسالة نجاح وهمية.
+                    if (sendFailed) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "جرّب تسجيل الدخول بحسابك الآن — سنعيد إرسال رابط التأكيد تلقائياً عند المحاولة.",
+                            color = MutedForeground,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
 
                     Spacer(Modifier.height(28.dp))
 
@@ -945,6 +963,9 @@ fun RegisterScreen(
     // بعد نجاح إنشاء الحساب نعرض هذه الشاشة بدل تنفيذ onRegisterSuccess فوراً.
     var showVerifyEmailSent by remember { mutableStateOf(false) }
     var registeredEmail by remember { mutableStateOf("") }
+    // ✅ جديد: هل فشل إرسال رابط التأكيد فعلياً؟ لعرض تنبيه صادق بدل افتراض
+    // نجاح الإرسال دائماً (كان بيتبلع بصمت سابقاً).
+    var verificationEmailFailed by remember { mutableStateOf(false) }
     // ✅ جديد: تظهر أخطاء الحقول فقط بعد أول محاولة إرسال
     var attemptedSubmit by remember { mutableStateOf(false) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -984,6 +1005,7 @@ fun RegisterScreen(
     if (showVerifyEmailSent) {
         VerifyEmailSentContent(
             email = registeredEmail,
+            sendFailed = verificationEmailFailed,
             viewModel = viewModel,
             onGoToLogin = onNavigateToLogin,
         )
@@ -1320,10 +1342,11 @@ fun RegisterScreen(
                                 email.trim(),
                                 phone.trim(),
                                 password
-                            ) { ok, msg ->
+                            ) { ok, msg, verificationEmailSent ->
                                 isLoading = false
                                 if (ok) {
                                     registeredEmail = email.trim()
+                                    verificationEmailFailed = !verificationEmailSent
                                     showVerifyEmailSent = true
                                 } else error = msg ?: "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"
                             }

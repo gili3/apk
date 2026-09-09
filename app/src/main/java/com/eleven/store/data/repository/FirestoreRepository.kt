@@ -149,9 +149,16 @@ class FirestoreRepository {
         functions.getHttpsCallable("sendVerificationEmail").call().await()
     }
 
+    // ✅ إصلاح: registerWithEmail كانت تُرجع FirebaseUser فقط، فنجاح/فشل إرسال
+    // رابط التأكيد (خطوة تالية بالأسفل) كان يُبلَع بصمت تماماً بدون أي أثر
+    // يوصل للواجهة — المستخدم يشوف شاشة "تحقق من بريدك" حتى لو الإرسال فشل
+    // فعلياً. الآن نُرجع النتيجتين معاً ليقدر الاستدعاء الأعلى (ViewModel)
+    // يعرض تنبيهاً صادقاً بدل افتراض النجاح دائماً.
+    data class RegisterOutcome(val user: FirebaseUser, val verificationEmailSent: Boolean)
+
     // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
     // ثم يكتب وثيقة المستخدم في Firestore (نفس الحقول المستخدمة في الموقع)
-    suspend fun registerWithEmail(name: String, email: String, phone: String, password: String): FirebaseUser {
+    suspend fun registerWithEmail(name: String, email: String, phone: String, password: String): RegisterOutcome {
         val result = auth.createUserWithEmailAndPassword(email, password).await()
         val user = result.user ?: throw IllegalStateException("تعذر إنشاء الحساب")
 
@@ -179,10 +186,12 @@ class FirestoreRepository {
         // ✅ رسالة الترحيب لا تُستدعى هنا يدوياً: onUserCreated (Cloud Function
         // على مستوى Firebase Auth نفسه) ترسلها تلقائياً لأي حساب جديد، بصرف
         // النظر عن طريقة التسجيل (بريد أو Google) أو المنصة (موقع/أندرويد).
-        try {
+        val verificationEmailSent = try {
             sendVerificationEmailViaFunction()
+            true
         } catch (e: Exception) {
             Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني", e)
+            false
         }
 
         // ✅ إصلاح: بما أن التحقق أصبح إجبارياً، لا يجب أن يبقى الحساب الجديد
@@ -191,7 +200,7 @@ class FirestoreRepository {
         // بشكل طبيعي عبر شاشة تسجيل الدخول بمجرد تأكيد البريد.
         auth.signOut()
 
-        return user
+        return RegisterOutcome(user, verificationEmailSent)
     }
 
     /**

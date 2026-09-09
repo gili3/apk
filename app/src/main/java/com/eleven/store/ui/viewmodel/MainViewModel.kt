@@ -81,10 +81,25 @@ class MainViewModel : ViewModel() {
     // ✅ إصلاح: registerWithEmail تُسجّل الخروج تلقائياً بعد إنشاء الحساب
     // (التحقق أصبح إجبارياً)، فاستدعاء syncFcmToken بعدها كان سيفشل بصمت
     // لعدم وجود مستخدم مسجَّل دخول فعلياً.
-    fun register(name: String, email: String, phone: String, password: String, onResult: (Boolean, String?) -> Unit) {
+    // ✅ إصلاح: onResult كان يُرجع (نجاح، رسالة خطأ) فقط، فنجاح إنشاء الحساب
+    // مع فشل إرسال رابط التأكيد كان يبان مطابقاً تماماً لنجاح كامل. أضفنا
+    // معامل ثالث verificationEmailSent (افتراضي true، غير ذي معنى عند
+    // onResult(false, ...)) عشان الشاشة تقدر تعرض تنبيهاً صادقاً بدل ما
+    // تفترض دايماً إن الرسالة وصلت.
+    fun register(
+        name: String,
+        email: String,
+        phone: String,
+        password: String,
+        onResult: (Boolean, String?, Boolean) -> Unit,
+    ) {
         viewModelScope.launch {
-            try { repo.registerWithEmail(name, email, phone, password); onResult(true, null) }
-            catch (e: Exception) { onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى")) }
+            try {
+                val outcome = repo.registerWithEmail(name, email, phone, password)
+                onResult(true, null, outcome.verificationEmailSent)
+            } catch (e: Exception) {
+                onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"), true)
+            }
         }
     }
 

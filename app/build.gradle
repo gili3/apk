@@ -123,6 +123,10 @@ dependencies {
     implementation 'com.google.firebase:firebase-auth-ktx'
     implementation 'com.google.firebase:firebase-storage-ktx'
     implementation 'com.google.firebase:firebase-messaging-ktx'
+    // ✅ جديد: يستخدمه FirestoreRepository لاستدعاء الدوال السحابية الجديدة
+    // (تأكيد بريد/استعادة كلمة مرور/حذف حساب برمز OTP — كلها ترسل عبر
+    // Gmail بقالب موحّد بدل قوالب Firebase الافتراضية بالرابط الخام)
+    implementation 'com.google.firebase:firebase-functions-ktx'
     implementation 'com.google.firebase:firebase-analytics-ktx'
     implementation 'com.google.firebase:firebase-crashlytics-ktx'
     // ✅ إضافة (Audit المرحلة 3، بند 3.7 — الحل الجذري لمشكلة نقص المخزون

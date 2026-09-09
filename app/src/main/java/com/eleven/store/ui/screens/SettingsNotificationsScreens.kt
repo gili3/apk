@@ -83,6 +83,12 @@ fun SettingsScreen(
     var deletePassword by remember { mutableStateOf("") }
     var showDeletePw by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
+    // ✅ جديد: خطوة رمز التأكيد (OTP) — بعد نجاح إعادة المصادقة (كلمة مرور
+    // أو Google)، لا يُحذف الحساب فوراً. تتحول النافذة لخطوة إدخال الرمز
+    // المُرسَل للبريد، ولا يتم الحذف الفعلي إلا بعد تأكيده.
+    var deleteOtpStep by remember { mutableStateOf(false) }
+    var deleteOtpCode by remember { mutableStateOf("") }
+    var isResendingOtp by remember { mutableStateOf(false) }
     val isGoogleAccount = remember { viewModel.isCurrentUserGoogleAccount() }
     val deleteGoogleLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -101,10 +107,12 @@ fun SettingsScreen(
                 isDeleting = false
                 scope.launch {
                     if (ok) {
-                        showDeleteAccountDialog = false
-                        snackbarHostState.showMessage("تم حذف الحساب بنجاح", SnackbarType.SUCCESS)
+                        // ✅ لم يُحذف الحساب بعد — فقط طُلب رمز التأكيد. ننتقل
+                        // لخطوة إدخال الرمز بدل إغلاق النافذة بنجاح مباشرة.
+                        deleteOtpStep = true
+                        snackbarHostState.showMessage("أرسلنا رمز تأكيد إلى بريدك الإلكتروني", SnackbarType.SUCCESS)
                     } else {
-                        snackbarHostState.showMessage(msg ?: "فشل حذف الحساب", SnackbarType.ERROR)
+                        snackbarHostState.showMessage(msg ?: "فشل إرسال رمز التأكيد", SnackbarType.ERROR)
                     }
                 }
             }
@@ -745,59 +753,135 @@ fun SettingsScreen(
         )
     }
 
-    // ✅ نافذة تأكيد حذف الحساب — تطلب كلمة المرور الحالية لحسابات
-    // البريد/كلمة المرور (لأن reauthenticate يحتاجها)، أو زر إعادة مصادقة
-    // عبر Google لحسابات Google (لا تملك كلمة مرور محلية أصلاً).
+    // ✅ نافذة تأكيد حذف الحساب — خطوتان الآن:
+    // 1) إثبات الهوية: كلمة المرور الحالية (بريد/كلمة مرور) أو إعادة مصادقة
+    //    Google، وينتج عنها طلب رمز تأكيد (OTP) يُرسَل للبريد.
+    // 2) إدخال رمز الـ6 أرقام — الحذف الفعلي لا يحدث إلا بعد تأكيده بنجاح.
     if (showDeleteAccountDialog) {
         AlertDialog(
-            onDismissRequest = { if (!isDeleting) showDeleteAccountDialog = false },
-            title = { Text("حذف الحساب نهائياً", fontWeight = FontWeight.Bold) },
+            onDismissRequest = {
+                if (!isDeleting) {
+                    showDeleteAccountDialog = false
+                    deleteOtpStep = false
+                    deleteOtpCode = ""
+                    deletePassword = ""
+                }
+            },
+            title = {
+                Text(
+                    if (deleteOtpStep) "أدخل رمز التأكيد" else "حذف الحساب نهائياً",
+                    fontWeight = FontWeight.Bold,
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "سيتم حذف حسابك وكل بياناته نهائياً، ولا يمكن التراجع عن هذا الإجراء.",
-                        fontSize = 14.sp,
-                        color = MutedForeground,
-                    )
-                    if (isGoogleAccount) {
+                    if (deleteOtpStep) {
                         Text(
-                            "للمتابعة، يجب تأكيد هويتك عبر Google مرة أخرى.",
-                            fontSize = 13.sp,
+                            "أرسلنا رمزاً من 6 أرقام إلى بريدك الإلكتروني. أدخله أدناه لتأكيد حذف حسابك نهائياً — لا يمكن التراجع عن هذا الإجراء بعد التأكيد.",
+                            fontSize = 14.sp,
                             color = MutedForeground,
                         )
-                    } else {
                         OutlinedTextField(
-                            value = deletePassword,
-                            onValueChange = { deletePassword = it },
-                            placeholder = { Text("كلمة المرور الحالية", fontSize = 14.sp) },
+                            value = deleteOtpCode,
+                            onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) deleteOtpCode = it },
+                            placeholder = { Text("رمز التأكيد", fontSize = 14.sp) },
                             leadingIcon = {
                                 Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
                             },
-                            trailingIcon = {
-                                IconButton(onClick = { showDeletePw = !showDeletePw }) {
-                                    Icon(
-                                        if (showDeletePw) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                        null,
-                                        tint = MutedForeground,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            },
-                            visualTransformation = if (showDeletePw) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             enabled = !isDeleting,
                             shape = RoundedCornerShape(8.dp),
                         )
+                        // ✅ إعادة الإرسال متاحة فقط لحسابات البريد/كلمة المرور —
+                        // كلمة المرور محفوظة مؤقتاً بالحالة فيمكن إعادة طلب رمز
+                        // جديد مباشرة. حسابات Google تحتاج إعادة مصادقة كاملة من
+                        // جديد لإعادة الإرسال، فنطلب من المستخدم البدء من جديد.
+                        if (!isGoogleAccount) {
+                            TextButton(
+                                enabled = !isDeleting && !isResendingOtp,
+                                onClick = {
+                                    isResendingOtp = true
+                                    viewModel.deleteAccount(deletePassword) { ok, msg ->
+                                        isResendingOtp = false
+                                        scope.launch {
+                                            snackbarHostState.showMessage(
+                                                if (ok) "تم إرسال رمز جديد" else (msg ?: "تعذّر إرسال رمز جديد"),
+                                                if (ok) SnackbarType.SUCCESS else SnackbarType.ERROR,
+                                            )
+                                        }
+                                    }
+                                },
+                            ) { Text(if (isResendingOtp) "جاري الإرسال..." else "لم يصلك الرمز؟ إعادة الإرسال") }
+                        }
+                    } else {
+                        Text(
+                            "سيتم حذف حسابك وكل بياناته نهائياً، ولا يمكن التراجع عن هذا الإجراء.",
+                            fontSize = 14.sp,
+                            color = MutedForeground,
+                        )
+                        if (isGoogleAccount) {
+                            Text(
+                                "للمتابعة، يجب تأكيد هويتك عبر Google مرة أخرى.",
+                                fontSize = 13.sp,
+                                color = MutedForeground,
+                            )
+                        } else {
+                            OutlinedTextField(
+                                value = deletePassword,
+                                onValueChange = { deletePassword = it },
+                                placeholder = { Text("كلمة المرور الحالية", fontSize = 14.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { showDeletePw = !showDeletePw }) {
+                                        Icon(
+                                            if (showDeletePw) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                            null,
+                                            tint = MutedForeground,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                },
+                                visualTransformation = if (showDeletePw) VisualTransformation.None else PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                enabled = !isDeleting,
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                        }
                     }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = !isDeleting && (isGoogleAccount || deletePassword.isNotBlank()),
+                    enabled = !isDeleting && (
+                        if (deleteOtpStep) deleteOtpCode.length == 6
+                        else (isGoogleAccount || deletePassword.isNotBlank())
+                    ),
                     colors = ButtonDefaults.buttonColors(containerColor = Destructive),
                     onClick = {
-                        if (isGoogleAccount) {
+                        if (deleteOtpStep) {
+                            isDeleting = true
+                            viewModel.confirmAccountDeletion(deleteOtpCode) { ok, msg ->
+                                isDeleting = false
+                                if (ok) {
+                                    showDeleteAccountDialog = false
+                                    deleteOtpStep = false
+                                    deleteOtpCode = ""
+                                    deletePassword = ""
+                                    scope.launch {
+                                        snackbarHostState.showMessage("تم حذف الحساب بنجاح", SnackbarType.SUCCESS)
+                                    }
+                                } else {
+                                    scope.launch {
+                                        snackbarHostState.showMessage(msg ?: "فشل تأكيد الحذف", SnackbarType.ERROR)
+                                    }
+                                }
+                            }
+                        } else if (isGoogleAccount) {
                             isDeleting = true
                             val googleClient = buildGoogleSignInClient(context)
                             deleteGoogleLauncher.launch(googleClient.signInIntent)
@@ -806,9 +890,10 @@ fun SettingsScreen(
                             viewModel.deleteAccount(deletePassword) { ok, msg ->
                                 isDeleting = false
                                 if (ok) {
-                                    showDeleteAccountDialog = false
+                                    // ✅ لم يُحذف الحساب بعد — فقط طُلب رمز التأكيد.
+                                    deleteOtpStep = true
                                     scope.launch {
-                                        snackbarHostState.showMessage("تم حذف الحساب بنجاح", SnackbarType.SUCCESS)
+                                        snackbarHostState.showMessage("أرسلنا رمز تأكيد إلى بريدك الإلكتروني", SnackbarType.SUCCESS)
                                     }
                                 } else {
                                     scope.launch {
@@ -819,13 +904,21 @@ fun SettingsScreen(
                         }
                     },
                 ) {
-                    Text(if (isDeleting) "جاري الحذف..." else "حذف نهائياً", color = Color.White)
+                    Text(
+                        if (isDeleting) "جاري التنفيذ..." else if (deleteOtpStep) "تأكيد الحذف نهائياً" else "متابعة",
+                        color = Color.White,
+                    )
                 }
             },
             dismissButton = {
                 OutlinedButton(
                     enabled = !isDeleting,
-                    onClick = { showDeleteAccountDialog = false },
+                    onClick = {
+                        showDeleteAccountDialog = false
+                        deleteOtpStep = false
+                        deleteOtpCode = ""
+                        deletePassword = ""
+                    },
                 ) { Text("إلغاء") }
             },
         )

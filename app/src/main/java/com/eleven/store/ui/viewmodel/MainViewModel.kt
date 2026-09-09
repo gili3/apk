@@ -66,6 +66,16 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ جديد: الخطوة الأخيرة من حذف الحساب — يُستدعى بعد أن ينجح
+    // deleteAccount/deleteAccountWithGoogle أعلاه (اللتان أصبحتا الآن تطلبان
+    // فقط رمز تأكيد ولا تحذفان شيئاً بعد) ويُدخل المستخدم الرمز الذي وصله.
+    fun confirmAccountDeletion(otp: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmAccountDeletion(otp); onResult(true, null) }
+            catch (e: Exception) { onResult(false, e.message) }
+        }
+    }
+
     fun isCurrentUserGoogleAccount(): Boolean = repo.isCurrentUserGoogleAccount()
 
     // ✅ إصلاح: registerWithEmail تُسجّل الخروج تلقائياً بعد إنشاء الحساب

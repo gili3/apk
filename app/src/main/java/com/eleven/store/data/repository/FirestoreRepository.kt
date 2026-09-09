@@ -37,9 +37,13 @@ class FirestoreRepository {
     // عن طلبات وصلت من التطبيق. التوحيد بمصدر واحد يمنع هذا الصنف من
     // الأخطاء بنيوياً بدل الاعتماد على تذكّر تحديث ثلاث نسخ متطابقة يدوياً.
 
-    private val db      = FirebaseFirestore.getInstance()
-    private val auth    = FirebaseAuth.getInstance()
-    private val storage = FirebaseStorage.getInstance()
+    private val db        = FirebaseFirestore.getInstance()
+    private val auth      = FirebaseAuth.getInstance()
+    private val storage   = FirebaseStorage.getInstance()
+    // ✅ جديد: نظام البريد الموحّد عبر Gmail — كل رسائل تأكيد البريد/استعادة
+    // كلمة المرور/حذف الحساب تمر الآن عبر دوال سحابية (بدل استدعاء Firebase
+    // Auth SDK مباشرة، التي ترسل بقالب Firebase الافتراضي بالرابط الخام).
+    private val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
 
     private val uid get() = auth.currentUser?.uid
 
@@ -128,13 +132,21 @@ class FirestoreRepository {
         val user = result.user
         if (user != null && !user.isEmailVerified) {
             try {
-                user.sendEmailVerification().await()
+                // ✅ إصلاح: كانت تستخدم user.sendEmailVerification() المباشرة
+                // (قالب Firebase الافتراضي). الآن دالة سحابية ترسل بقالبنا
+                // الموحّد عبر Gmail (زر "تأكيد الحساب" بدل رابط خام).
+                sendVerificationEmailViaFunction()
             } catch (e: Exception) {
                 Log.w("FirestoreRepository", "تعذّر إعادة إرسال رابط التأكيد عند محاولة الدخول", e)
             }
             auth.signOut()
             throw EmailNotVerifiedException()
         }
+    }
+
+    /** ينادي الدالة السحابية sendVerificationEmail (يتطلب مستخدماً مسجَّل الدخول حالياً) */
+    private suspend fun sendVerificationEmailViaFunction() {
+        functions.getHttpsCallable("sendVerificationEmail").call().await()
     }
 
     // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
@@ -160,11 +172,15 @@ class FirestoreRepository {
 
         // ✅ إصلاح: لم يكن هناك أي تأكيد بريد إلكتروني إطلاقاً بالتطبيق —
         // أي حساب بريد/كلمة مرور يدخل مباشرة بلا أي تحقق من ملكية البريد
-        // الفعلي. نرسل رابط التحقق فور إنشاء الحساب. فشل الإرسال (مثال: تجاوز
-        // حصة Firebase اليومية) لا يجب أن يمنع إنشاء الحساب نفسه — يبقى
+        // الفعلي. نرسل رابط التحقق فور إنشاء الحساب (عبر الدالة السحابية —
+        // قالبنا الموحّد بدل قالب Firebase الافتراضي). فشل الإرسال (مثال:
+        // تجاوز حصة Gmail اليومية) لا يجب أن يمنع إنشاء الحساب نفسه — يبقى
         // بإمكان المستخدم طلب إعادة الإرسال لاحقاً من الإعدادات.
+        // ✅ رسالة الترحيب لا تُستدعى هنا يدوياً: onUserCreated (Cloud Function
+        // على مستوى Firebase Auth نفسه) ترسلها تلقائياً لأي حساب جديد، بصرف
+        // النظر عن طريقة التسجيل (بريد أو Google) أو المنصة (موقع/أندرويد).
         try {
-            user.sendEmailVerification().await()
+            sendVerificationEmailViaFunction()
         } catch (e: Exception) {
             Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني", e)
         }
@@ -183,8 +199,8 @@ class FirestoreRepository {
      * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة).
      */
     suspend fun resendEmailVerification() {
-        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
-        user.sendEmailVerification().await()
+        auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
+        sendVerificationEmailViaFunction()
     }
 
     // ✅ تسجيل الدخول/التسجيل عبر Google، مطابق لسلوك الموقع (signInWithPopup + setDoc merge)
@@ -208,8 +224,13 @@ class FirestoreRepository {
         return user
     }
 
-    suspend fun sendPasswordReset(email: String) =
-        auth.sendPasswordResetEmail(email).await()
+    // ✅ إصلاح: كانت تستخدم auth.sendPasswordResetEmail() المباشرة (قالب
+    // Firebase الافتراضي). الآن دالة سحابية تولّد نفس الرابط وترسله بقالبنا
+    // الموحّد عبر Gmail. لا تتطلب تسجيل دخول (المستخدم نسي كلمة مروره أصلاً).
+    suspend fun sendPasswordReset(email: String) {
+        functions.getHttpsCallable("sendPasswordResetEmailCustom")
+            .call(mapOf("email" to email)).await()
+    }
 
     // ✅ يراقب وثيقة users/{uid} مباشرةً — هذا هو مصدر رقم الهاتف الحقيقي
     // (وليس user.phoneNumber من Firebase Auth، فهو مخصص لتسجيل الدخول عبر
@@ -258,12 +279,17 @@ class FirestoreRepository {
         user.updatePassword(newPassword).await()
     }
 
+    // ✅ إصلاح (رمز تأكيد الحذف): حذف الحساب لم يعد خطوة واحدة. هذه الدالة
+    // الآن هي الخطوة 1 فقط — إعادة مصادقة بكلمة المرور (إثبات معرفة كلمة
+    // السر)، ثم طلب رمز تأكيد (OTP) من 6 أرقام يُرسَل لبريد الحساب. الحذف
+    // الفعلي لا يحدث هنا إطلاقاً — فقط داخل confirmAccountDeletion بعد إدخال
+    // الرمز الصحيح (انظر تعليقها أدناه لسبب نقل الحذف الفعلي للسيرفر).
     suspend fun deleteAccount(currentPassword: String) {
         val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
         val email = user.email ?: throw IllegalStateException("لا يوجد بريد إلكتروني مرتبط بالحساب")
         val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, currentPassword)
         user.reauthenticate(credential).await()
-        user.delete().await()
+        requestAccountDeletionOtp()
     }
 
     // ✅ إصلاح: deleteAccount(currentPassword) يفترض دائماً حساب بريد/كلمة
@@ -271,11 +297,35 @@ class FirestoreRepository {
     // تُستدعى بنفس المسار بكلمة مرور فارغة فتفشل إعادة المصادقة دائماً، ولا
     // يمكن حذف الحساب فعلياً. هذا المسار المنفصل يعيد المصادقة بـcredential
     // من Google (idToken حديث من GoogleSignInClient) قبل الحذف.
+    // ✅ نفس تعديل deleteAccount أعلاه بالضبط: الخطوة 1 فقط (إعادة مصادقة
+    // Google هنا بدل كلمة المرور)، ثم طلب رمز التأكيد.
     suspend fun deleteAccountWithGoogle(idToken: String) {
         val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
         val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
         user.reauthenticate(credential).await()
-        user.delete().await()
+        requestAccountDeletionOtp()
+    }
+
+    private suspend fun requestAccountDeletionOtp() {
+        requireOnline()
+        functions.getHttpsCallable("requestAccountDeletionOtp").call().await()
+    }
+
+    /**
+     * الخطوة 2 (الأخيرة) من حذف الحساب: يُستدعى بعد إدخال المستخدم لرمز
+     * الـ6 أرقام الذي وصله بالبريد. الحذف الفعلي (admin.auth().deleteUser)
+     * يحدث على السيرفر داخل الدالة السحابية confirmAccountDeletion — وليس
+     * هنا عبر user.delete() المباشرة كما كان سابقاً — لضمان أن حذف الحساب
+     * لا يمكن أن يتم إلا بعد إثبات امتلاك الوصول الفعلي لبريد الحساب، لا
+     * كلمة المرور وحدها. بعد نجاح الحذف، نسجّل الخروج محلياً فوراً لأن
+     * جلسة Firebase Auth الحالية على الجهاز أصبحت غير صالحة لحساب لم يعد
+     * موجوداً.
+     */
+    suspend fun confirmAccountDeletion(otp: String) {
+        requireOnline()
+        functions.getHttpsCallable("confirmAccountDeletion")
+            .call(mapOf("otp" to otp)).await()
+        auth.signOut()
     }
 
     /** هل المستخدم الحالي مسجَّل عبر Google (لا يملك كلمة مرور محلية)؟ */

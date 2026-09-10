@@ -855,6 +855,7 @@ private fun ForgotPasswordContent(
 private fun VerifyEmailSentContent(
     email: String,
     sendFailed: Boolean = false,
+    errorDetail: String? = null,
     viewModel: MainViewModel,
     onGoToLogin: () -> Unit,
 ) {
@@ -914,6 +915,20 @@ private fun VerifyEmailSentContent(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        // ✅ تشخيص مؤقت: يعرض وصف الاستثناء الفعلي (نوعه/كوده/رسالته)
+                        // عشان نقدر نحدد هل الفشل محلي أو من السيرفر بدون Logcat.
+                        // يُفضَّل إخفاء هذا السطر عن المستخدم النهائي لاحقاً بعد
+                        // انتهاء التشخيص (أو إبقاؤه خلف علم DEBUG فقط).
+                        if (!errorDetail.isNullOrBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "تفاصيل تقنية: $errorDetail",
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(28.dp))
@@ -966,6 +981,11 @@ fun RegisterScreen(
     // ✅ جديد: هل فشل إرسال رابط التأكيد فعلياً؟ لعرض تنبيه صادق بدل افتراض
     // نجاح الإرسال دائماً (كان بيتبلع بصمت سابقاً).
     var verificationEmailFailed by remember { mutableStateOf(false) }
+    // ✅ تشخيص: وصف الاستثناء الفعلي (نوعه/كوده/رسالته) لما إرسال رابط
+    // التأكيد يفشل، عشان يظهر بالشاشة نفسها بدل ما يضيع بـLog.w محلي غير
+    // متاح بدون Logcat — هذا اللي يحسم هل الفشل محلي (مثلاً شبكة/توكن) أو
+    // وصل فعلاً للسيرفر وفشل هناك.
+    var verificationErrorDetail by remember { mutableStateOf<String?>(null) }
     // ✅ جديد: تظهر أخطاء الحقول فقط بعد أول محاولة إرسال
     var attemptedSubmit by remember { mutableStateOf(false) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1006,6 +1026,7 @@ fun RegisterScreen(
         VerifyEmailSentContent(
             email = registeredEmail,
             sendFailed = verificationEmailFailed,
+            errorDetail = verificationErrorDetail,
             viewModel = viewModel,
             onGoToLogin = onNavigateToLogin,
         )
@@ -1342,11 +1363,12 @@ fun RegisterScreen(
                                 email.trim(),
                                 phone.trim(),
                                 password
-                            ) { ok, msg, verificationEmailSent ->
+                            ) { ok, msg, verificationEmailSent, verificationEmailErrorDetail ->
                                 isLoading = false
                                 if (ok) {
                                     registeredEmail = email.trim()
                                     verificationEmailFailed = !verificationEmailSent
+                                    verificationEmailErrorDetail?.let { verificationErrorDetail = it }
                                     showVerifyEmailSent = true
                                 } else error = msg ?: "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"
                             }

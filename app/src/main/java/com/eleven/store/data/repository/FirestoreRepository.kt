@@ -162,7 +162,27 @@ class FirestoreRepository {
     // يوصل للواجهة — المستخدم يشوف شاشة "تحقق من بريدك" حتى لو الإرسال فشل
     // فعلياً. الآن نُرجع النتيجتين معاً ليقدر الاستدعاء الأعلى (ViewModel)
     // يعرض تنبيهاً صادقاً بدل افتراض النجاح دائماً.
-    data class RegisterOutcome(val user: FirebaseUser, val verificationEmailSent: Boolean)
+    // ✅ تشخيص (رسائل التأكيد لا تصل ولا يوجد أي أثر لها بسجلات Cloud
+    // Functions إطلاقاً): كان الخطأ الفعلي يُسجَّل فقط بـLog.w المحلي غير
+    // المتاح بدون كابل/Logcat، فلا طريقة لمعرفة هل فشل الاستدعاء محلياً
+    // (قبل وصوله لفايربيز أصلاً) أو بالسيرفر. verificationEmailError يحمل
+    // الآن وصف الاستثناء الفعلي (نوعه + كوده لو FirebaseFunctionsException
+    // + رسالته) ليظهر مباشرة بالشاشة نفسها.
+    data class RegisterOutcome(
+        val user: FirebaseUser,
+        val verificationEmailSent: Boolean,
+        val verificationEmailError: String? = null,
+    )
+
+    /** وصف مختصر وواضح لأي استثناء يحدث أثناء استدعاء دوال تأكيد البريد —
+     * يشمل كود FirebaseFunctionsException (مثل UNAUTHENTICATED/INTERNAL/
+     * NOT_FOUND) إن وُجد، لعرضه مباشرة بالواجهة بدل إخفائه بـLog.w فقط. */
+    private fun describeMailException(e: Exception): String {
+        val functionsEx = e as? com.google.firebase.functions.FirebaseFunctionsException
+        val className = e::class.java.simpleName
+        val msg = e.message?.takeIf { it.isNotBlank() } ?: "بدون رسالة تفصيلية"
+        return if (functionsEx != null) "$className(${functionsEx.code}): $msg" else "$className: $msg"
+    }
 
     // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
     // ثم يكتب وثيقة المستخدم في Firestore (نفس الحقول المستخدمة في الموقع)
@@ -194,11 +214,14 @@ class FirestoreRepository {
         // ✅ رسالة الترحيب لا تُستدعى هنا يدوياً: onUserCreated (Cloud Function
         // على مستوى Firebase Auth نفسه) ترسلها تلقائياً لأي حساب جديد، بصرف
         // النظر عن طريقة التسجيل (بريد أو Google) أو المنصة (موقع/أندرويد).
+        var verificationEmailError: String? = null
         val verificationEmailSent = try {
             sendVerificationEmailViaFunction()
             true
         } catch (e: Exception) {
-            Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني", e)
+            val detail = describeMailException(e)
+            Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني: $detail", e)
+            verificationEmailError = detail
             false
         }
 
@@ -208,16 +231,25 @@ class FirestoreRepository {
         // بشكل طبيعي عبر شاشة تسجيل الدخول بمجرد تأكيد البريد.
         auth.signOut()
 
-        return RegisterOutcome(user, verificationEmailSent)
+        return RegisterOutcome(user, verificationEmailSent, verificationEmailError)
     }
 
     /**
      * إعادة إرسال رابط تأكيد البريد الإلكتروني للمستخدم الحالي (يُستخدم من
      * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة).
+     * ✅ تشخيص: عند الفشل، ترمي استثناءً برسالة تصف الخطأ الفعلي (نفس منطق
+     * describeMailException) بدل ترك الاستثناء الخام يمر كما هو، ليقدر
+     * المستدعي (ViewModel) يعرضه مباشرة بالواجهة.
      */
     suspend fun resendEmailVerification() {
         auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
-        sendVerificationEmailViaFunction()
+        try {
+            sendVerificationEmailViaFunction()
+        } catch (e: Exception) {
+            val detail = describeMailException(e)
+            Log.w("FirestoreRepository", "تعذّر إعادة إرسال رابط التأكيد: $detail", e)
+            throw Exception(detail, e)
+        }
     }
 
     // ✅ تسجيل الدخول/التسجيل عبر Google، مطابق لسلوك الموقع (signInWithPopup + setDoc merge)

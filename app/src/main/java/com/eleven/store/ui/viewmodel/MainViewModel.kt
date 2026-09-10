@@ -101,28 +101,36 @@ class MainViewModel : ViewModel() {
     // معامل ثالث verificationEmailSent (افتراضي true، غير ذي معنى عند
     // onResult(false, ...)) عشان الشاشة تقدر تعرض تنبيهاً صادقاً بدل ما
     // تفترض دايماً إن الرسالة وصلت.
+    // ✅ تشخيص: أضفنا معامل رابع verificationEmailErrorDetail (وصف الاستثناء
+    // الفعلي من describeMailException، مثل "FirebaseFunctionsException
+    // (UNAUTHENTICATED): ..." أو "FirebaseNetworkException: ...") ليقدر
+    // الاستدعاء الأعلى (الشاشة) يعرضه مباشرة بدل الاكتفاء بـLog.w المحلي
+    // غير المتاح بدون Logcat.
     fun register(
         name: String,
         email: String,
         phone: String,
         password: String,
-        onResult: (Boolean, String?, Boolean) -> Unit,
+        onResult: (Boolean, String?, Boolean, String?) -> Unit,
     ) {
         viewModelScope.launch {
             try {
                 val outcome = repo.registerWithEmail(name, email, phone, password)
-                onResult(true, null, outcome.verificationEmailSent)
+                onResult(true, null, outcome.verificationEmailSent, outcome.verificationEmailError)
             } catch (e: Exception) {
-                onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"), true)
+                onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"), true, null)
             }
         }
     }
 
     // ✅ جديد: إعادة إرسال رابط تأكيد البريد الإلكتروني من شاشة الإعدادات
+    // ✅ تشخيص: onResult ترجع الآن رسالة الخطأ الفعلية (e.message من
+    // resendEmailVerification أصبحت وصف الاستثناء نفسه بعد التعديل بالأعلى)
+    // بدل رسالة عامة ثابتة تخفي السبب الحقيقي.
     fun resendEmailVerification(onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.resendEmailVerification(); onResult(true, null) }
-            catch (e: Exception) { onResult(false, "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
+            catch (e: Exception) { onResult(false, e.message ?: "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
         }
     }
 

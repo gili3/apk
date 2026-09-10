@@ -56,8 +56,11 @@ fun SettingsScreen(
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
 
+    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com — لو مفيش رابط
+    // موقع حقيقي مضبوط من الأدمن، baseUrl تبقى فاضية والأزرار تحت بتتصرف
+    // بمنعها من فتح رابط خاطئ (راجع onClick بتاع كل زر).
     val baseUrl = remember(storeSettings.websiteUrl) {
-        storeSettings.websiteUrl.ifBlank { "https://eleven-sd.com" }.trimEnd('/')
+        storeSettings.websiteUrl.trim().trimEnd('/')
     }
 
     // ✅ إصلاح: تسجيل الخروج كان يحدث فوراً بلا أي تأكيد — ضغطة واحدة بالخطأ
@@ -620,7 +623,11 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        openUri(context, "$baseUrl/privacy-policy")
+                                        if (baseUrl.isBlank()) {
+                                            scope.launch { snackbarHostState.showMessage("الصفحة غير متاحة حالياً", SnackbarType.ERROR) }
+                                        } else {
+                                            openUri(context, "$baseUrl/privacy-policy")
+                                        }
                                     }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -656,7 +663,11 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        openUri(context, "$baseUrl/terms")
+                                        if (baseUrl.isBlank()) {
+                                            scope.launch { snackbarHostState.showMessage("الصفحة غير متاحة حالياً", SnackbarType.ERROR) }
+                                        } else {
+                                            openUri(context, "$baseUrl/terms")
+                                        }
                                     }
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,

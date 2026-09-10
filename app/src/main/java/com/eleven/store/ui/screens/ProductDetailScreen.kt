@@ -79,8 +79,15 @@ fun ProductDetailScreen(
     val context = LocalContext.current
 
     // ── مشاركة رابط المنتج — مطابقة لـ handleShare في الموقع ──
+    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com — بدون رابط موقع
+    // حقيقي مضبوط من الأدمن، الميزة معطّلة (رسالة واضحة) بدل نسخ/مشاركة
+    // رابط يوصّل لصفحة الأدمن بالغلط.
     fun shareProduct() {
-        val baseUrl = storeSettings.websiteUrl.ifBlank { "https://eleven-sd.com" }.trimEnd('/')
+        val baseUrl = storeSettings.websiteUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            coroutineScope.launch { snackbarHostState.showMessage("مشاركة المنتج غير متاحة حالياً", SnackbarType.ERROR) }
+            return
+        }
         val link = "$baseUrl/product/$productId"
 
         // نسخ الرابط للحافظة — نفس سلوك navigator.clipboard.writeText بالموقع

@@ -500,9 +500,13 @@ private fun InvoiceCard(
     paymentLabel: String,
     formattedDate: String,
 ) {
+    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com نهائياً — الدومين ده
+    // بقى بيفتح لوحة تحكم الأدمن الداخلية، مش صفحة تحقق من الطلب. لو الأدمن
+    // لسه مضبطش رابط موقع فعلي من storeSettings، الرابط بيبقى فاضياً
+    // والقسم بيتخفي بدل ما يوجّه العميل بالغلط لصفحة الأدمن.
     val verifyUrl = remember(order.verificationToken, storeSettings.websiteUrl) {
-        val base = storeSettings.websiteUrl.ifBlank { "https://eleven-sd.com" }.trimEnd('/')
-        "$base/verify-order/${order.verificationToken}"
+        val base = storeSettings.websiteUrl.trim().trimEnd('/')
+        if (base.isBlank()) "" else "$base/verify-order/${order.verificationToken}"
     }
 
     val brandColor = Accent
@@ -701,30 +705,32 @@ private fun InvoiceCard(
                 }
             }
 
-            // ── QR ──────────────────────────────────────
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider(color = Border)
+            // ── QR (تظهر فقط لو الأدمن ضبط رابط موقع حقيقي) ──
+            if (verifyUrl.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = Border)
 
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(top = 40.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                InvoiceQrCode(value = verifyUrl, sizeDp = 110.dp)
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "تحقق من صحة الطلب عبر مسح الرمز",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "شكراً لتسوقكم من ${storeSettings.storeName.ifBlank { "Eleven" }}",
-                    fontSize = 12.sp,
-                    color = MutedForeground,
-                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 40.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    InvoiceQrCode(value = verifyUrl, sizeDp = 110.dp)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "تحقق من صحة الطلب عبر مسح الرمز",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "شكراً لتسوقكم من ${storeSettings.storeName.ifBlank { "Eleven" }}",
+                        fontSize = 12.sp,
+                        color = MutedForeground,
+                    )
+                }
             }
         }
     }
@@ -739,9 +745,15 @@ private fun shareOrPrintInvoice(
     order: Order,
     storeSettings: StoreSettings,
 ) {
-    val base = storeSettings.websiteUrl.ifBlank { "https://eleven-sd.com" }.trimEnd('/')
-    val verifyUrl = "$base/verify-order/${order.verificationToken}"
-    val shareText = "فاتورة الطلب #${order.orderNumber}\n$verifyUrl"
+    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com — لو مفيش رابط
+    // موقع حقيقي مضبوط، نشارك تفاصيل الفاتورة نصياً بدون رابط بدل رابط
+    // يوصّل لصفحة الأدمن بالغلط.
+    val base = storeSettings.websiteUrl.trim().trimEnd('/')
+    val shareText = if (base.isBlank()) {
+        "فاتورة الطلب #${order.orderNumber}"
+    } else {
+        "فاتورة الطلب #${order.orderNumber}\n$base/verify-order/${order.verificationToken}"
+    }
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, shareText)

@@ -52,17 +52,32 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ إصلاح: هذه الدوال الثلاث كانت تعرض e.message خام مباشرة للمستخدم.
+    // لو فشل استدعاء الدالة السحابية محلياً قبل وصوله للسيرفر (مثال: توكن
+    // غير صالح مؤقتاً)، e.message يكون نص الكود الداخلي نفسه مثل
+    // "UNAUTHENTICATED" بلا أي ترجمة — وهو تحديداً ما كان يظهر للمستخدم.
+    // mapDeletionError تعرض رسالة عربية مفهومة دائماً بدل ذلك.
+    private fun mapDeletionError(e: Exception, fallback: String): String {
+        val functionsCode = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+        return when {
+            functionsCode == com.google.firebase.functions.FirebaseFunctionsException.Code.UNAUTHENTICATED ->
+                "انتهت صلاحية الجلسة، يرجى تسجيل الخروج والدخول مرة أخرى ثم إعادة المحاولة"
+            e is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> "كلمة المرور غير صحيحة"
+            else -> e.message?.takeIf { it.isNotBlank() && !it.equals("UNAUTHENTICATED", ignoreCase = true) } ?: fallback
+        }
+    }
+
     fun deleteAccount(currentPassword: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.deleteAccount(currentPassword); onResult(true, null) }
-            catch (e: Exception) { onResult(false, e.message) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر حذف الحساب، حاول مرة أخرى")) }
         }
     }
 
     fun deleteAccountWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.deleteAccountWithGoogle(idToken); onResult(true, null) }
-            catch (e: Exception) { onResult(false, e.message) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر حذف الحساب، حاول مرة أخرى")) }
         }
     }
 
@@ -72,7 +87,7 @@ class MainViewModel : ViewModel() {
     fun confirmAccountDeletion(otp: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.confirmAccountDeletion(otp); onResult(true, null) }
-            catch (e: Exception) { onResult(false, e.message) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر تأكيد الحذف، حاول مرة أخرى")) }
         }
     }
 

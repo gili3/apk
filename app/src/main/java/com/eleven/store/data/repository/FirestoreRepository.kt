@@ -144,8 +144,16 @@ class FirestoreRepository {
         }
     }
 
-    /** ينادي الدالة السحابية sendVerificationEmail (يتطلب مستخدماً مسجَّل الدخول حالياً) */
+    // ✅ إصلاح ("تعذّر إرسال رابط التأكيد" عند التسجيل): نفس مشكلة
+    // "unauthenticated" اللي حصلت في حذف الحساب، لكن هنا بعد
+    // createUserWithEmailAndPassword مباشرة — جلسة المستخدم الجديد لسه
+    // "طرية" وقتها، فتوكن الهوية المخزَّن محلياً ممكن ميكونش جاهزاً بعد
+    // لحظة الاستدعاء، فتفشل الدالة السحابية محلياً بخطأ عام قبل ما تصل
+    // للسيرفر. تجديد التوكن إجبارياً هنا (مكان واحد يغطي كل نداءات هذه
+    // الدالة: التسجيل، إعادة الإرسال من الإعدادات، وإعادة الإرسال عند
+    // محاولة دخول بحساب غير مؤكَّد) يضمن دائماً توكن صالح وقت الاستدعاء.
     private suspend fun sendVerificationEmailViaFunction() {
+        auth.currentUser?.getIdToken(true)?.await()
         functions.getHttpsCallable("sendVerificationEmail").call().await()
     }
 
@@ -315,8 +323,15 @@ class FirestoreRepository {
         requestAccountDeletionOtp()
     }
 
+    // ✅ إصلاح ("unauthenticated" عند حذف الحساب): الدالتان السحابيتان هنا
+    // تُستدعيان مباشرة بعد reauthenticate() بالأعلى. عميل Firebase Functions
+    // يُرفق توكن الهوية المخزَّن محلياً تلقائياً — لو لم يُجدَّد هذا التوكن
+    // بعد بأحدث حالة (خاصة بعد إعادة مصادقة للتو)، الاستدعاء يفشل محلياً
+    // بخطأ "UNAUTHENTICATED" عام قبل أن يصل للسيرفر أصلاً. إجبار تجديد
+    // التوكن هنا (getIdToken(true)) يضمن استخدام توكن صالح دائماً.
     private suspend fun requestAccountDeletionOtp() {
         requireOnline()
+        auth.currentUser?.getIdToken(true)?.await()
         functions.getHttpsCallable("requestAccountDeletionOtp").call().await()
     }
 
@@ -332,6 +347,7 @@ class FirestoreRepository {
      */
     suspend fun confirmAccountDeletion(otp: String) {
         requireOnline()
+        auth.currentUser?.getIdToken(true)?.await() // نفس إصلاح requestAccountDeletionOtp أعلاه
         functions.getHttpsCallable("confirmAccountDeletion")
             .call(mapOf("otp" to otp)).await()
         auth.signOut()

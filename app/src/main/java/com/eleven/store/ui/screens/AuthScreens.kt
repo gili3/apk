@@ -1,6 +1,7 @@
 package com.eleven.store.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -343,6 +344,7 @@ private fun AuthCard(
 //  </div>
 // ═══════════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AuthTextField(
     value: String,

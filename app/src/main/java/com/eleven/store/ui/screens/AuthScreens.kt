@@ -915,14 +915,16 @@ private fun VerifyEmailSentContent(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        // ✅ تشخيص مؤقت: يعرض وصف الاستثناء الفعلي (نوعه/كوده/رسالته)
-                        // عشان نقدر نحدد هل الفشل محلي أو من السيرفر بدون Logcat.
-                        // يُفضَّل إخفاء هذا السطر عن المستخدم النهائي لاحقاً بعد
-                        // انتهاء التشخيص (أو إبقاؤه خلف علم DEBUG فقط).
-                        if (!errorDetail.isNullOrBlank()) {
+                        // ✅ تشخيص محصور بنسخ التطوير فقط: كان هذا السطر يظهر لكل
+                        // المستخدمين وقت تتبّع مشكلة UNAUTHENTICATED (انحلّت —
+                        // كانت صلاحيات IAM). أبقيناه خلف BuildConfig.DEBUG بدل حذفه
+                        // بالكامل، ليكون متاحاً تلقائياً لأي تشخيص مشابه بالمستقبل
+                        // أثناء التطوير، دون أن يصل نص استثناء تقني لمستخدم حقيقي
+                        // بالنسخة المنشورة (يخوّفه بلا فائدة فعلية له).
+                        if (!errorDetail.isNullOrBlank() && com.eleven.store.BuildConfig.DEBUG) {
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "تفاصيل تقنية: $errorDetail",
+                                "تفاصيل تقنية (DEBUG فقط): $errorDetail",
                                 color = MaterialTheme.colorScheme.error,
                                 fontSize = 11.sp,
                                 textAlign = TextAlign.Center,

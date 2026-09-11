@@ -127,10 +127,15 @@ class MainViewModel : ViewModel() {
     // ✅ تشخيص: onResult ترجع الآن رسالة الخطأ الفعلية (e.message من
     // resendEmailVerification أصبحت وصف الاستثناء نفسه بعد التعديل بالأعلى)
     // بدل رسالة عامة ثابتة تخفي السبب الحقيقي.
+    // ✅ إصلاح (تحفّظ بعد حل مشكلة UNAUTHENTICATED): كانت e.message تُمرَّر
+    // خام للواجهة — كان هذا مفيداً وقت التشخيص، لكن يعرض نص استثناء تقني
+    // لمستخدم حقيقي بلا فائدة له. الآن: رسالة عامة دائماً للواجهة، والتفاصيل
+    // الفعلية مسجّلة أصلاً بـLog.w داخل FirestoreRepository.resendEmailVerification
+    // (متاحة بـLogcat وقت التطوير عند الحاجة).
     fun resendEmailVerification(onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.resendEmailVerification(); onResult(true, null) }
-            catch (e: Exception) { onResult(false, e.message ?: "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
+            catch (e: Exception) { onResult(false, "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
         }
     }
 

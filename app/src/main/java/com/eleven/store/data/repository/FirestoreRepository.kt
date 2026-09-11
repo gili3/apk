@@ -24,7 +24,33 @@ import java.net.UnknownHostException
 
 // ✅ جديد: يُرمى عند محاولة دخول بحساب بريد/كلمة مرور لم يؤكَّد بعد — تُستخدم
 // من MainViewModel لعرض رسالة مخصّصة بدل رسالة "فشل تسجيل الدخول" العامة.
-class EmailNotVerifiedException : Exception("email not verified")
+// ✅ يحمل الآن البريد نفسه (email) حتى تقدر الشاشة تفتح مباشرة على شاشة
+// إدخال رمز التأكيد (OTP) بدل الاكتفاء برسالة نصية لا تقدّم أي إجراء فوري.
+class EmailNotVerifiedException(val email: String) : Exception("email not verified")
+
+/**
+ * ✅ جديد: توحيد صيغة بريد Gmail قبل أي استدعاء لـFirebase Auth (تسجيل،
+ * دخول، طلب استعادة كلمة مرور) — جيميل يتجاهل النقاط بالجزء المحلي من
+ * العنوان فعلياً (yxr.249@gmail.com و yxr249@gmail.com نفس صندوق البريد)،
+ * لكن Firebase Auth يعاملهما كحسابين مختلفين تماماً. تطبيق هذا التطبيع في
+ * كل نقطة إنشاء/بحث عن حساب (وليس فقط الدخول) هو ما يضمن أن الحساب
+ * يُنشأ بصيغة واحدة قانونية من الأصل، فتطابقه لاحقاً أي صيغة أخرى بنقاط
+ * مختلفة يكتبها نفس المستخدم. مطابقة تماماً لـnormalizeEmail بملف
+ * lib/email.ts بجهة السيرفر (تُستخدم هناك عند البحث عن الحساب لطلب رمز
+ * استعادة كلمة المرور، حتى تتطابق مع الصيغة القانونية المخزَّنة هنا).
+ */
+internal fun normalizeEmailForAuth(email: String): String {
+    val trimmed = email.trim()
+    val atIndex = trimmed.lastIndexOf('@')
+    if (atIndex <= 0) return trimmed
+    val local = trimmed.substring(0, atIndex)
+    val domain = trimmed.substring(atIndex + 1).lowercase()
+    return if (domain == "gmail.com" || domain == "googlemail.com") {
+        "${local.replace(".", "")}@$domain"
+    } else {
+        "$local@$domain"
+    }
+}
 
 class FirestoreRepository {
 
@@ -128,19 +154,19 @@ class FirestoreRepository {
     // لا يبقى المستخدم داخل التطبيق بجلسة غير مؤكَّدة، ثم نرمي استثناءً
     // مخصصاً تلتقطه الواجهة لعرض رسالة واضحة بدل "فشل تسجيل الدخول" العامة.
     suspend fun loginWithEmail(email: String, password: String) {
-        val result = auth.signInWithEmailAndPassword(email, password).await()
+        val result = auth.signInWithEmailAndPassword(normalizeEmailForAuth(email), password).await()
         val user = result.user
         if (user != null && !user.isEmailVerified) {
             try {
-                // ✅ إصلاح: كانت تستخدم user.sendEmailVerification() المباشرة
-                // (قالب Firebase الافتراضي). الآن دالة سحابية ترسل بقالبنا
-                // الموحّد عبر Gmail (زر "تأكيد الحساب" بدل رابط خام).
-                sendVerificationEmailViaFunction()
+                // ✅ إصلاح: كانت ترسل رابط تأكيد. الآن ترسل رمز تأكيد (OTP) عبر
+                // نفس القالب الموحّد — المستخدم يُدخله مباشرة داخل شاشة التحقق.
+                sendVerificationOtpViaFunction()
             } catch (e: Exception) {
-                Log.w("FirestoreRepository", "تعذّر إعادة إرسال رابط التأكيد عند محاولة الدخول", e)
+                Log.w("FirestoreRepository", "تعذّر إعادة إرسال رمز التأكيد عند محاولة الدخول", e)
             }
+            val unverifiedEmail = user.email ?: normalizeEmailForAuth(email)
             auth.signOut()
-            throw EmailNotVerifiedException()
+            throw EmailNotVerifiedException(unverifiedEmail)
         }
     }
 
@@ -152,9 +178,12 @@ class FirestoreRepository {
     // للسيرفر. تجديد التوكن إجبارياً هنا (مكان واحد يغطي كل نداءات هذه
     // الدالة: التسجيل، إعادة الإرسال من الإعدادات، وإعادة الإرسال عند
     // محاولة دخول بحساب غير مؤكَّد) يضمن دائماً توكن صالح وقت الاستدعاء.
-    private suspend fun sendVerificationEmailViaFunction() {
+    // ✅ إصلاح: كانت تستدعي sendVerificationEmail (رابط). الآن تستدعي
+    // sendEmailVerificationOtp (رمز من 6 أرقام) — نفس منطق تجديد التوكن
+    // إجبارياً قبل النداء لضمان جلسة صالحة وقت الاستدعاء.
+    private suspend fun sendVerificationOtpViaFunction() {
         auth.currentUser?.getIdToken(true)?.await()
-        functions.getHttpsCallable("sendVerificationEmail").call().await()
+        functions.getHttpsCallable("sendEmailVerificationOtp").call().await()
     }
 
     // ✅ إصلاح: registerWithEmail كانت تُرجع FirebaseUser فقط، فنجاح/فشل إرسال
@@ -187,7 +216,8 @@ class FirestoreRepository {
     // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
     // ثم يكتب وثيقة المستخدم في Firestore (نفس الحقول المستخدمة في الموقع)
     suspend fun registerWithEmail(name: String, email: String, phone: String, password: String): RegisterOutcome {
-        val result = auth.createUserWithEmailAndPassword(email, password).await()
+        val normalizedEmail = normalizeEmailForAuth(email)
+        val result = auth.createUserWithEmailAndPassword(normalizedEmail, password).await()
         val user = result.user ?: throw IllegalStateException("تعذر إنشاء الحساب")
 
         val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
@@ -199,7 +229,7 @@ class FirestoreRepository {
             mapOf(
                 "id" to user.uid,
                 "name" to name,
-                "email" to email,
+                "email" to normalizedEmail,
                 "phone" to phone,
                 "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
             )
@@ -207,8 +237,8 @@ class FirestoreRepository {
 
         // ✅ إصلاح: لم يكن هناك أي تأكيد بريد إلكتروني إطلاقاً بالتطبيق —
         // أي حساب بريد/كلمة مرور يدخل مباشرة بلا أي تحقق من ملكية البريد
-        // الفعلي. نرسل رابط التحقق فور إنشاء الحساب (عبر الدالة السحابية —
-        // قالبنا الموحّد بدل قالب Firebase الافتراضي). فشل الإرسال (مثال:
+        // الفعلي. نرسل رمز تحقق (OTP) فور إنشاء الحساب (عبر الدالة السحابية
+        // — قالبنا الموحّد بدل قالب Firebase الافتراضي). فشل الإرسال (مثال:
         // تجاوز حصة Gmail اليومية) لا يجب أن يمنع إنشاء الحساب نفسه — يبقى
         // بإمكان المستخدم طلب إعادة الإرسال لاحقاً من الإعدادات.
         // ✅ رسالة الترحيب لا تُستدعى هنا يدوياً: onUserCreated (Cloud Function
@@ -216,11 +246,11 @@ class FirestoreRepository {
         // النظر عن طريقة التسجيل (بريد أو Google) أو المنصة (موقع/أندرويد).
         var verificationEmailError: String? = null
         val verificationEmailSent = try {
-            sendVerificationEmailViaFunction()
+            sendVerificationOtpViaFunction()
             true
         } catch (e: Exception) {
             val detail = describeMailException(e)
-            Log.w("FirestoreRepository", "تعذّر إرسال رابط تأكيد البريد الإلكتروني: $detail", e)
+            Log.w("FirestoreRepository", "تعذّر إرسال رمز تأكيد البريد الإلكتروني: $detail", e)
             verificationEmailError = detail
             false
         }
@@ -235,8 +265,9 @@ class FirestoreRepository {
     }
 
     /**
-     * إعادة إرسال رابط تأكيد البريد الإلكتروني للمستخدم الحالي (يُستخدم من
-     * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة).
+     * إعادة إرسال رمز تأكيد البريد الإلكتروني للمستخدم الحالي (يُستخدم من
+     * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة، ومن شاشة
+     * إدخال الرمز نفسها عند الضغط على "إعادة الإرسال").
      * ✅ تشخيص: عند الفشل، ترمي استثناءً برسالة تصف الخطأ الفعلي (نفس منطق
      * describeMailException) بدل ترك الاستثناء الخام يمر كما هو، ليقدر
      * المستدعي (ViewModel) يعرضه مباشرة بالواجهة.
@@ -244,12 +275,33 @@ class FirestoreRepository {
     suspend fun resendEmailVerification() {
         auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
         try {
-            sendVerificationEmailViaFunction()
+            sendVerificationOtpViaFunction()
         } catch (e: Exception) {
             val detail = describeMailException(e)
-            Log.w("FirestoreRepository", "تعذّر إعادة إرسال رابط التأكيد: $detail", e)
+            Log.w("FirestoreRepository", "تعذّر إعادة إرسال رمز التأكيد: $detail", e)
             throw Exception(detail, e)
         }
+    }
+
+    /**
+     * ✅ جديد: تأكيد البريد الإلكتروني بإدخال الرمز (OTP) بدل فتح رابط.
+     * بلا شرط تسجيل دخول عمداً — التسجيل يسجّل خروج المستخدم فوراً بعد
+     * إرسال الرمز (التحقق إجباري قبل أي دخول فعلي)، فشاشة إدخال الرمز
+     * تعمل دائماً بلا جلسة، والبريد+الرمز هما إثبات الملكية.
+     */
+    suspend fun confirmEmailVerificationOtp(email: String, otp: String) {
+        functions.getHttpsCallable("confirmEmailVerificationOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email), "otp" to otp)).await()
+    }
+
+    /**
+     * ✅ جديد: إعادة إرسال رمز تأكيد البريد بلا جلسة مسجَّلة (زر "إعادة
+     * الإرسال" بشاشة إدخال الرمز نفسها) — بخلاف resendEmailVerification
+     * بالأعلى (تتطلب جلسة، تُستخدم من شاشة الإعدادات فقط).
+     */
+    suspend fun resendEmailVerificationOtpByEmail(email: String) {
+        functions.getHttpsCallable("sendEmailVerificationOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email))).await()
     }
 
     // ✅ تسجيل الدخول/التسجيل عبر Google، مطابق لسلوك الموقع (signInWithPopup + setDoc merge)
@@ -273,12 +325,24 @@ class FirestoreRepository {
         return user
     }
 
-    // ✅ إصلاح: كانت تستخدم auth.sendPasswordResetEmail() المباشرة (قالب
-    // Firebase الافتراضي). الآن دالة سحابية تولّد نفس الرابط وترسله بقالبنا
-    // الموحّد عبر Gmail. لا تتطلب تسجيل دخول (المستخدم نسي كلمة مروره أصلاً).
-    suspend fun sendPasswordReset(email: String) {
-        functions.getHttpsCallable("sendPasswordResetEmailCustom")
-            .call(mapOf("email" to email)).await()
+    // ✅ إصلاح: كانت تُرسل رابط إعادة تعيين (sendPasswordResetEmailCustom).
+    // الآن ترسل رمز تأكيد (OTP) يُدخَل مباشرة داخل التطبيق مع كلمة المرور
+    // الجديدة (confirmPasswordResetOtp بالأسفل)، بدل فتح رابط خارجي.
+    suspend fun requestPasswordResetOtp(email: String) {
+        functions.getHttpsCallable("sendPasswordResetOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email))).await()
+    }
+
+    /** الخطوة الثانية: يُرسِل الرمز + كلمة المرور الجديدة معاً للتحقق والتغيير دفعة واحدة. */
+    suspend fun confirmPasswordResetOtp(email: String, otp: String, newPassword: String) {
+        functions.getHttpsCallable("confirmPasswordResetOtp")
+            .call(
+                mapOf(
+                    "email" to normalizeEmailForAuth(email),
+                    "otp" to otp,
+                    "newPassword" to newPassword,
+                )
+            ).await()
     }
 
     // ✅ يراقب وثيقة users/{uid} مباشرةً — هذا هو مصدر رقم الهاتف الحقيقي

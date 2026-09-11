@@ -35,13 +35,18 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun login(email: String, password: String, onResult: (Boolean, String?) -> Unit) {
+    // ✅ إصلاح: onResult كان يُرجع (نجاح، رسالة) فقط، فحالة "البريد غير
+    // مؤكَّد" كانت تُعرض كرسالة نصية بلا أي إجراء فوري ممكن (كان يطلب فتح
+    // رابط بريد خارجي). أضفنا معامل ثالث unverifiedEmail (غير فارغ فقط في
+    // هذه الحالة تحديداً) ليقدر LoginScreen يفتح شاشة إدخال رمز التأكيد
+    // مباشرة بدل مجرد نص إرشادي.
+    fun login(email: String, password: String, onResult: (Boolean, String?, String?) -> Unit) {
         viewModelScope.launch {
-            try { repo.loginWithEmail(email, password); repo.syncFcmToken(); onResult(true, null) }
+            try { repo.loginWithEmail(email, password); repo.syncFcmToken(); onResult(true, null, null) }
             catch (e: EmailNotVerifiedException) {
-                onResult(false, "لم يتم تأكيد بريدك الإلكتروني بعد. أرسلنا رابط تأكيد جديد إلى بريدك، افتحه ثم سجّل الدخول مرة أخرى.")
+                onResult(false, "لم يتم تأكيد بريدك الإلكتروني بعد. أرسلنا رمز تأكيد جديد إلى بريدك.", e.email)
             }
-            catch (e: Exception) { onResult(false, mapAuthError(e, "فشل تسجيل الدخول")) }
+            catch (e: Exception) { onResult(false, mapAuthError(e, "فشل تسجيل الدخول"), null) }
         }
     }
 
@@ -146,10 +151,16 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    // ✅ يطابق رسائل الأخطاء المستخدمة في الموقع (Login.tsx / Register.tsx)
+    // ✅ رسائل خطأ دخول محدّدة وواضحة — بما فيها تمييز الحساب المحظور
+    // (ERROR_USER_DISABLED، يصدر عن حسابات عطّلها الأدمن من لوحة التحكم
+    // عبر setUserDisabled) عن الحساب غير المسجَّل أصلاً (ERROR_USER_NOT_FOUND)
+    // — كانا يظهران برسالة واحدة مطابقة سابقاً رغم اختلاف السبب الفعلي تماماً.
     private fun mapAuthError(e: Exception, fallback: String): String {
         return when (e) {
-            is com.google.firebase.auth.FirebaseAuthInvalidUserException -> "البريد الإلكتروني غير مسجل"
+            is com.google.firebase.auth.FirebaseAuthInvalidUserException -> when (e.errorCode) {
+                "ERROR_USER_DISABLED" -> "الحساب محظور"
+                else -> "لا يوجد حساب مرتبط بهذا البريد الإلكتروني"
+            }
             is com.google.firebase.auth.FirebaseAuthUserCollisionException -> "البريد الإلكتروني مستخدم بالفعل"
             is com.google.firebase.auth.FirebaseAuthWeakPasswordException -> "كلمة المرور ضعيفة جداً"
             is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> when (e.errorCode) {
@@ -162,9 +173,57 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun sendPasswordReset(email: String, onResult: (Boolean) -> Unit) {
+    // ✅ إصلاح: استبدال رابط إعادة التعيين برمز (OTP) — خطوتان منفصلتان
+    // الآن: طلب الرمز، ثم تأكيده مع كلمة المرور الجديدة معاً.
+    fun requestPasswordResetOtp(email: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
-            try { repo.sendPasswordReset(email); onResult(true) }
+            try { repo.requestPasswordResetOtp(email); onResult(true) }
+            catch (e: Exception) { onResult(false) }
+        }
+    }
+
+    fun confirmPasswordResetOtp(email: String, otp: String, newPassword: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmPasswordResetOtp(email, otp, newPassword); onResult(true, null) }
+            catch (e: Exception) {
+                val code = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+                val msg = when (code) {
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED ->
+                        "انتهت صلاحية الرمز، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+                        "عدد محاولات كبير جداً، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT ->
+                        e.message ?: "رمز التأكيد غير صحيح"
+                    else -> "تعذّر إعادة تعيين كلمة المرور، حاول مرة أخرى"
+                }
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // ✅ جديد: تأكيد البريد بالرمز من شاشة إدخال الرمز (بلا جلسة مسجَّلة)
+    fun confirmEmailVerificationOtp(email: String, otp: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmEmailVerificationOtp(email, otp); onResult(true, null) }
+            catch (e: Exception) {
+                val code = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+                val msg = when (code) {
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED ->
+                        "انتهت صلاحية الرمز، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+                        "عدد محاولات كبير جداً، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT ->
+                        e.message ?: "رمز التأكيد غير صحيح"
+                    else -> "تعذّر تأكيد البريد، حاول مرة أخرى"
+                }
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun resendEmailVerificationOtpByEmail(email: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try { repo.resendEmailVerificationOtpByEmail(email); onResult(true) }
             catch (e: Exception) { onResult(false) }
         }
     }

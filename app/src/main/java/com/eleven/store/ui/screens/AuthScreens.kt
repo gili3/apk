@@ -5,6 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -356,6 +360,15 @@ private fun AuthTextField(
     imeAction: androidx.compose.ui.text.input.ImeAction = androidx.compose.ui.text.input.ImeAction.Default,
     keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
 ) {
+    // ✅ جديد: يمرّر الحقل تلقائياً لأعلى منطقة مرئية فوق الكيبورد بمجرد
+    // حصوله على التركيز (سواء بالضغط عليه مباشرة أو بالانتقال إليه عبر
+    // "التالي" بالكيبورد من الحقل السابق) — بدل بقائه مخفياً جزئياً أو
+    // كلياً خلف الكيبورد بانتظار تمرير يدوي من المستخدم. يعمل مع أي حقل
+    // يستخدم AuthTextField تلقائياً بصرف النظر عن الشاشة (دخول/تسجيل/
+    // استعادة كلمة مرور/رمز تأكيد)، بلا حاجة لتعديل كل شاشة على حدة.
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+
     Column(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = value,
@@ -371,7 +384,13 @@ private fun AuthTextField(
             // بدل فرض قيمة أصغر من اللازم.
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 56.dp),
+                .heightIn(min = 56.dp)
+                .bringIntoViewRequester(bringIntoViewRequester)
+                .onFocusEvent { focusState ->
+                    if (focusState.isFocused) {
+                        scope.launch { bringIntoViewRequester.bringIntoView() }
+                    }
+                },
             singleLine = singleLine,
             enabled = enabled,
             isError = errorMessage != null,
@@ -442,6 +461,9 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var showForgotPassword by remember { mutableStateOf(false) }
+    // ✅ جديد: تُملأ فقط عند محاولة دخول بحساب بريد غير مؤكَّد — تفتح شاشة
+    // إدخال رمز التأكيد مباشرة بدل ترك المستخدم برسالة نصية بلا إجراء.
+    var pendingVerificationEmail by remember { mutableStateOf<String?>(null) }
     // ✅ جديد: أخطاء لحظية لكل حقل — تُحسب فقط بعد أول محاولة إرسال حتى لا
     // تظهر رسائل حمراء للمستخدم قبل ما يكتب أي شيء أصلاً
     var attemptedSubmit by remember { mutableStateOf(false) }
@@ -479,6 +501,17 @@ fun LoginScreen(
         return
     }
 
+    // ── حالة: بريد غير مؤكَّد، بانتظار إدخال رمز التأكيد ──
+    pendingVerificationEmail?.let { emailNeedingVerification ->
+        VerifyEmailOtpContent(
+            email = emailNeedingVerification,
+            viewModel = viewModel,
+            onVerified = { pendingVerificationEmail = null },
+            onBack = { pendingVerificationEmail = null },
+        )
+        return
+    }
+
     // ════════ شاشة تسجيل الدخول ════════
     Scaffold(
         topBar = { ElevenTopBar(title = "تسجيل الدخول") }
@@ -488,6 +521,7 @@ fun LoginScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             contentAlignment = Alignment.Center,
@@ -610,9 +644,10 @@ fun LoginScreen(
 
                             isLoading = true
                             error = ""
-                            viewModel.login(email.trim(), password) { ok, msg ->
+                            viewModel.login(email.trim(), password) { ok, msg, unverifiedEmail ->
                                 isLoading = false
                                 if (ok) onLoginSuccess()
+                                else if (unverifiedEmail != null) pendingVerificationEmail = unverifiedEmail
                                 else error = msg ?: "فشل تسجيل الدخول"
                             }
                         },
@@ -703,7 +738,8 @@ fun LoginScreen(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  FORGOT PASSWORD — مطابقة لحالة showForgot في Login.tsx
+//  FORGOT PASSWORD — خطوتان الآن بدل رابط: (1) طلب رمز عبر البريد،
+//  (2) إدخال الرمز + كلمة مرور جديدة معاً لإتمام إعادة التعيين.
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -711,11 +747,24 @@ private fun ForgotPasswordContent(
     viewModel: MainViewModel,
     onBackToLogin: () -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     var forgotEmail by remember { mutableStateOf("") }
     var forgotLoading by remember { mutableStateOf(false) }
+    // ✅ null = لسه بخطوة إدخال البريد، غير null = الرمز أُرسل، ننتقل لخطوة
+    // إدخال الرمز + كلمة المرور الجديدة لنفس هذا البريد تحديداً
+    var otpSentTo by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    val sentTo = otpSentTo
+    if (sentTo != null) {
+        ResetPasswordOtpContent(
+            email = sentTo,
+            viewModel = viewModel,
+            onResetSuccess = onBackToLogin,
+            onBack = { otpSentTo = null },
+        )
+        return
+    }
 
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
@@ -726,6 +775,7 @@ private fun ForgotPasswordContent(
                 .fillMaxSize()
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             contentAlignment = Alignment.Center,
@@ -745,7 +795,7 @@ private fun ForgotPasswordContent(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "سنرسل رابط الاسترداد إلى بريدك الإلكتروني",
+                        "سنرسل رمز تأكيد إلى بريدك الإلكتروني",
                         color = MutedForeground,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
@@ -769,6 +819,7 @@ private fun ForgotPasswordContent(
                             )
                         },
                         keyboardType = KeyboardType.Email,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
                     )
 
                     Spacer(Modifier.height(24.dp))
@@ -782,25 +833,13 @@ private fun ForgotPasswordContent(
                                 return@Button
                             }
                             forgotLoading = true
-                            // ✅ يطابق سلوك الموقع بالضبط: استدعاء Firebase الحقيقي
-                            // sendPasswordResetEmail(auth, forgotEmail) بدل المحاكاة الوهمية
-                            viewModel.sendPasswordReset(forgotEmail) { success ->
+                            val emailToSend = forgotEmail.trim()
+                            // ✅ لا نكشف للمستخدم إن كان البريد مسجَّلاً بحساب من عدمه —
+                            // نفس الرسالة دائماً (sendPasswordResetOtp بالسيرفر يتصرف
+                            // بنفس المنطق من جهته)، وننتقل لخطوة إدخال الرمز في الحالتين.
+                            viewModel.requestPasswordResetOtp(emailToSend) { _ ->
                                 forgotLoading = false
-                                scope.launch {
-                                    if (success) {
-                                        snackbarHostState.showMessage(
-                                            "تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني",
-                                            SnackbarType.SUCCESS
-                                        )
-                                        forgotEmail = ""
-                                        onBackToLogin()
-                                    } else {
-                                        snackbarHostState.showMessage(
-                                            "لم يتم العثور على حساب بهذا البريد الإلكتروني",
-                                            SnackbarType.ERROR
-                                        )
-                                    }
-                                }
+                                otpSentTo = emailToSend
                             }
                         },
                         enabled = forgotEmail.isNotBlank() && !forgotLoading,
@@ -822,7 +861,7 @@ private fun ForgotPasswordContent(
                             Spacer(Modifier.width(8.dp))
                             Text("جاري الإرسال...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         } else {
-                            Text("إرسال رابط الاسترداد", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("إرسال رمز التأكيد", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         }
                     }
 
@@ -844,29 +883,38 @@ private fun ForgotPasswordContent(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  VERIFY EMAIL SENT — تظهر بعد إنشاء الحساب مباشرة (التحقق إجباري
-//  الآن، فالحساب الجديد لا يُبقي المستخدم مسجّل دخول). إعادة الإرسال
-//  تحدث تلقائياً بمجرد أي محاولة دخول لاحقة قبل التأكيد (راجع
-//  loginWithEmail في FirestoreRepository)، فلا حاجة لزر إعادة إرسال
-//  مستقل هنا يتطلب مستخدماً مسجّل دخول أصلاً (وهو غير متاح بهذه الحالة).
+//  RESET PASSWORD OTP — الخطوة الثانية: رمز التأكيد + كلمة المرور
+//  الجديدة معاً، تحقق وتغيير بطلب واحد (confirmPasswordResetOtp)
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-private fun VerifyEmailSentContent(
+private fun ResetPasswordOtpContent(
     email: String,
-    sendFailed: Boolean = false,
-    errorDetail: String? = null,
     viewModel: MainViewModel,
-    onGoToLogin: () -> Unit,
+    onResetSuccess: () -> Unit,
+    onBack: () -> Unit,
 ) {
+    var otp by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var resending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
     Scaffold(
-        topBar = { ElevenTopBar(title = "تأكيد البريد الإلكتروني") }
+        snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
+        topBar = { ElevenTopBar(title = "رمز التأكيد", onBack = onBack) },
     ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             contentAlignment = Alignment.Center,
@@ -883,7 +931,210 @@ private fun VerifyEmailSentContent(
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        "تحقق من بريدك الإلكتروني",
+                        "أدخل رمز التأكيد",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "أرسلنا رمزاً من 6 أرقام إلى $email",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
+                    Spacer(Modifier.height(28.dp))
+
+                    if (error.isNotEmpty()) {
+                        AuthErrorBox(error)
+                        Spacer(Modifier.height(20.dp))
+                    }
+
+                    FieldLabel("رمز التأكيد", required = true)
+                    Spacer(Modifier.height(8.dp))
+                    AuthTextField(
+                        value = otp,
+                        onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) { otp = it; error = "" } },
+                        placeholder = "000000",
+                        leadingIcon = {
+                            Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(22.dp))
+                        },
+                        keyboardType = KeyboardType.Number,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
+                        ),
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    FieldLabel("كلمة المرور الجديدة", required = true)
+                    Spacer(Modifier.height(8.dp))
+                    AuthTextField(
+                        value = newPassword,
+                        onValueChange = { newPassword = it; error = "" },
+                        placeholder = "••••••••",
+                        leadingIcon = {
+                            Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(22.dp))
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(
+                                    if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    null, tint = MutedForeground, modifier = Modifier.size(22.dp),
+                                )
+                            }
+                        },
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardType = KeyboardType.Password,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Next,
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onNext = { focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
+                        ),
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    FieldLabel("تأكيد كلمة المرور", required = true)
+                    Spacer(Modifier.height(8.dp))
+                    AuthTextField(
+                        value = confirmPassword,
+                        onValueChange = { confirmPassword = it; error = "" },
+                        placeholder = "••••••••",
+                        leadingIcon = {
+                            Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(22.dp))
+                        },
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardType = KeyboardType.Password,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = { focusManager.clearFocus() }
+                        ),
+                    )
+
+                    Spacer(Modifier.height(24.dp))
+
+                    Button(
+                        onClick = {
+                            when {
+                                otp.length != 6 -> error = "أدخل رمز التأكيد المكوّن من 6 أرقام"
+                                AuthValidation.passwordError(newPassword) != null ->
+                                    error = AuthValidation.passwordError(newPassword)!!
+                                newPassword != confirmPassword -> error = "كلمتا المرور غير متطابقتين"
+                                else -> {
+                                    isLoading = true
+                                    error = ""
+                                    viewModel.confirmPasswordResetOtp(email, otp, newPassword) { ok, msg ->
+                                        isLoading = false
+                                        if (ok) {
+                                            scope.launch {
+                                                snackbarHostState.showMessage(
+                                                    "تم تغيير كلمة المرور بنجاح، سجّل الدخول بكلمة المرور الجديدة",
+                                                    SnackbarType.SUCCESS,
+                                                )
+                                            }
+                                            onResetSuccess()
+                                        } else {
+                                            error = msg ?: "تعذّر إعادة تعيين كلمة المرور"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isLoading,
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("جاري التأكيد...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        } else {
+                            Text("تأكيد وتغيير كلمة المرور", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    TextButton(
+                        onClick = {
+                            resending = true
+                            viewModel.requestPasswordResetOtp(email) {
+                                resending = false
+                                scope.launch {
+                                    snackbarHostState.showMessage("تم إرسال رمز جديد إلى بريدك", SnackbarType.SUCCESS)
+                                }
+                            }
+                        },
+                        enabled = !resending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (resending) "جاري الإرسال..." else "لم يصلك الرمز؟ إعادة الإرسال",
+                            color = Accent,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VERIFY EMAIL OTP — تظهر بعد إنشاء الحساب مباشرة (التحقق إجباري
+//  الآن، فالحساب الجديد لا يُبقي المستخدم مسجّل دخول)، وأيضاً عند محاولة
+//  دخول لاحقة بحساب لم يُؤكَّد بعد (راجع LoginScreen). إدخال رمز مكوَّن
+//  من 6 أرقام بدل فتح رابط خارجي — نفس فلسفة ResetPasswordOtpContent.
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+private fun VerifyEmailOtpContent(
+    email: String,
+    sendFailed: Boolean = false,
+    viewModel: MainViewModel,
+    onVerified: () -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
+    var otp by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var resending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    Scaffold(
+        snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
+        topBar = { ElevenTopBar(title = "تأكيد البريد الإلكتروني", onBack = onBack) },
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(MaterialTheme.colorScheme.background)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                AuthCard {
+                    AuthLogo()
+                    Spacer(Modifier.height(24.dp))
+                    Icon(
+                        Icons.Filled.MarkEmailRead,
+                        null,
+                        tint = Accent,
+                        modifier = Modifier.size(48.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "أدخل رمز التأكيد",
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Bold,
                         fontSize = 24.sp,
@@ -894,59 +1145,91 @@ private fun VerifyEmailSentContent(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         if (sendFailed)
-                            "تم إنشاء حسابك بنجاح، لكن تعذّر إرسال رابط التأكيد الآن."
+                            "تم إنشاء حسابك بنجاح، لكن تعذّر إرسال رمز التأكيد الآن. اضغط \"إعادة الإرسال\" أدناه."
                         else
-                            "أرسلنا رابط تأكيد إلى${if (email.isNotBlank()) " $email" else " بريدك الإلكتروني"}. افتح الرابط لتأكيد حسابك، ثم سجّل الدخول.",
+                            "أرسلنا رمزاً من 6 أرقام إلى${if (email.isNotBlank()) " $email" else " بريدك الإلكتروني"}",
                         color = MutedForeground,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    // ✅ جديد: بدل ما نسكت تماماً عن فشل الإرسال، نوضّح أن محاولة
-                    // تسجيل الدخول ستعيد إرسال الرابط تلقائياً (loginWithEmail
-                    // بالفعل تفعل هذا لأي حساب غير مؤكَّد) — معلومة صحيحة
-                    // وقابلة للتنفيذ بدل رسالة نجاح وهمية.
-                    if (sendFailed) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "جرّب تسجيل الدخول بحسابك الآن — سنعيد إرسال رابط التأكيد تلقائياً عند المحاولة.",
-                            color = MutedForeground,
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        // ✅ تشخيص محصور بنسخ التطوير فقط: كان هذا السطر يظهر لكل
-                        // المستخدمين وقت تتبّع مشكلة UNAUTHENTICATED (انحلّت —
-                        // كانت صلاحيات IAM). أبقيناه خلف BuildConfig.DEBUG بدل حذفه
-                        // بالكامل، ليكون متاحاً تلقائياً لأي تشخيص مشابه بالمستقبل
-                        // أثناء التطوير، دون أن يصل نص استثناء تقني لمستخدم حقيقي
-                        // بالنسخة المنشورة (يخوّفه بلا فائدة فعلية له).
-                        if (!errorDetail.isNullOrBlank() && com.eleven.store.BuildConfig.DEBUG) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "تفاصيل تقنية (DEBUG فقط): $errorDetail",
-                                color = MaterialTheme.colorScheme.error,
-                                fontSize = 11.sp,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
 
                     Spacer(Modifier.height(28.dp))
 
+                    if (error.isNotEmpty()) {
+                        AuthErrorBox(error)
+                        Spacer(Modifier.height(20.dp))
+                    }
+
+                    FieldLabel("رمز التأكيد", required = true)
+                    Spacer(Modifier.height(8.dp))
+                    AuthTextField(
+                        value = otp,
+                        onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) { otp = it; error = "" } },
+                        placeholder = "000000",
+                        leadingIcon = {
+                            Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(22.dp))
+                        },
+                        keyboardType = KeyboardType.Number,
+                        enabled = !isLoading,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                    )
+
+                    Spacer(Modifier.height(24.dp))
+
                     Button(
-                        onClick = onGoToLogin,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp),
+                        onClick = {
+                            if (otp.length != 6) {
+                                error = "أدخل رمز التأكيد المكوّن من 6 أرقام"
+                                return@Button
+                            }
+                            isLoading = true
+                            error = ""
+                            viewModel.confirmEmailVerificationOtp(email, otp) { ok, msg ->
+                                isLoading = false
+                                if (ok) {
+                                    scope.launch {
+                                        snackbarHostState.showMessage("تم تأكيد بريدك بنجاح، يمكنك تسجيل الدخول الآن", SnackbarType.SUCCESS)
+                                    }
+                                    onVerified()
+                                } else {
+                                    error = msg ?: "تعذّر تأكيد البريد"
+                                }
+                            }
+                        },
+                        enabled = !isLoading,
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Accent,
-                            contentColor = Color.White,
-                        ),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
                     ) {
-                        Text("الذهاب لتسجيل الدخول", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        if (isLoading) {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("جاري التأكيد...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        } else {
+                            Text("تأكيد", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    TextButton(
+                        onClick = {
+                            resending = true
+                            viewModel.resendEmailVerificationOtpByEmail(email) {
+                                resending = false
+                                scope.launch {
+                                    snackbarHostState.showMessage("تم إرسال رمز جديد إلى بريدك", SnackbarType.SUCCESS)
+                                }
+                            }
+                        },
+                        enabled = !resending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (resending) "جاري الإرسال..." else "لم يصلك الرمز؟ إعادة الإرسال",
+                            color = Accent,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }
@@ -1023,14 +1306,14 @@ fun RegisterScreen(
         }
     }
 
-    // ── حالة: تم إنشاء الحساب وأُرسل رابط التأكيد ──
+    // ── حالة: تم إنشاء الحساب وأُرسل رمز التأكيد ──
     if (showVerifyEmailSent) {
-        VerifyEmailSentContent(
+        VerifyEmailOtpContent(
             email = registeredEmail,
             sendFailed = verificationEmailFailed,
-            errorDetail = verificationErrorDetail,
             viewModel = viewModel,
-            onGoToLogin = onNavigateToLogin,
+            onVerified = onNavigateToLogin,
+            onBack = onNavigateToLogin,
         )
         return
     }
@@ -1054,6 +1337,7 @@ fun RegisterScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             contentAlignment = Alignment.Center,
@@ -1095,7 +1379,7 @@ fun RegisterScreen(
                     AuthTextField(
                         value = name,
                         onValueChange = { name = it; error = "" },
-                        placeholder = "أحمد محمد",
+                        placeholder = "اسمك",
                         leadingIcon = {
                             Icon(
                                 Icons.Filled.Person,
@@ -1158,7 +1442,7 @@ fun RegisterScreen(
                     AuthTextField(
                         value = phone,
                         onValueChange = { phone = it },
-                        placeholder = "+966501234567",
+                        placeholder = "0912345678",
                         leadingIcon = {
                             Icon(
                                 Icons.Filled.Phone,
@@ -1375,7 +1659,12 @@ fun RegisterScreen(
                                 } else error = msg ?: "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"
                             }
                         },
-                        enabled = !isLoading,
+                        // ✅ إصلاح: كان الزر مفعّلاً دائماً (enabled = !isLoading فقط)،
+                        // والموافقة على الشروط تُفحص فقط عند الضغط (validate())، فيبدو
+                        // الزر جاهزاً للاستخدام رغم أن الضغط عليه بلا موافقة سابقة كان
+                        // سيُرجع خطأً فوراً. تعطيله فعلياً حتى الموافقة يعكس الحالة
+                        // الحقيقية للنموذج بدل الاعتماد على رسالة خطأ بعد الضغط.
+                        enabled = !isLoading && agreeTerms,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(44.dp),

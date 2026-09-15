@@ -1,5 +1,6 @@
 package com.eleven.store.ui.components
 
+import com.eleven.store.ui.screens.formatPrice as sharedFormatPrice
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -60,14 +61,11 @@ fun ProductCard(
     onAddToCart: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    formatPrice: (Any?) -> String = { value ->
-        val number = when (value) {
-            is String -> value.toDoubleOrNull() ?: 0.0
-            is Number -> value.toDouble()
-            else -> 0.0
-        }
-        "%.2f ج.س".format(number)
-    }
+    // ملاحظة: كانت هذه دالة منفصلة بصيغة "%.2f ج.س" بدون فواصل ألفية —
+    // هذا المكون غير مستخدم حالياً بأي شاشة (كل شاشة لها بطاقة منتج خاصة
+    // بها)، لكن تم توحيده مع formatPrice() في ScreenCommon.kt احتياطاً
+    // لأي استخدام مستقبلي، بدل ترك نسخة قديمة بلا فواصل ألفية بالكود.
+    formatPrice: (Any?) -> String = ::sharedFormatPrice
 ) {
     val discount = product.discountPercent
     Card(

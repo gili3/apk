@@ -40,18 +40,7 @@ import kotlinx.coroutines.launch
 // ═══════════════════════════════════════════════════════════════
 //  دالة مساعدة لتنسيق الأسعار
 // ═══════════════════════════════════════════════════════════════
-private fun formatPriceCheckout(value: Any?): String {
-    val d = when (value) {
-        is Double -> value
-        is Long -> value.toDouble()
-        is Int -> value.toDouble()
-        is String -> value.toDoubleOrNull() ?: 0.0
-        else -> 0.0
-    }
-    val s = if (d == d.toLong().toDouble()) d.toLong().toString()
-    else "%.2f".format(d)
-    return "$s ج.س"
-}
+// ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
 
 // ═══════════════════════════════════════════════════════════════
 //  CHECKOUT SCREEN — نسخة طبق الأصل من Checkout.tsx
@@ -159,11 +148,16 @@ fun CheckoutScreen(
     val checkoutScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // ✅ الشحن مجاني فقط إذا كان الحد مفعّلاً (> 0) والمجموع يبلغه
+    // ✅ إصلاح: كانت الأسطر التالية تفرض شحناً ثابتاً 30 ج.س (رقم لا وجود
+    // له بإعدادات المتجر إطلاقاً) كلما كانت storeSettings.shippingCost = 0
+    // — أي لو ضبط الأدمن الشحن كمجاني بالكامل، شاشة السلة كانت تعرض
+    // "مجاني" بشكل صحيح بينما هذه الشاشة تحسب وتُحصِّل 30 ج.س فعلياً عند
+    // الدفع. الآن تتطابق الحسابات 100% مع منطق CartScreen بالضبط: تُستخدم
+    // قيمة storeSettings.shippingCost كما هي دائماً بلا أي قيمة احتياطية.
     val shippingCost = if (storeSettings.freeShippingMinOrder > 0 &&
         orderTotal >= storeSettings.freeShippingMinOrder
     ) 0.0
-    else (storeSettings.shippingCost.takeIf { it > 0 } ?: 30.0)
+    else storeSettings.shippingCost
     // ✅ إصلاح: كان الكوبون يعمل فقط عند الدفع عبر السلة (isCartCheckout) — لا
     // توجد أي طريقة لتطبيق كود خصم عند "شراء الآن" رغم أن repo.placeOrder
     // يدعمه بالكامل بصرف النظر عن مصدر الطلب. أصبح متاحاً في كل الحالات الآن.
@@ -669,7 +663,7 @@ private fun PaymentStepContent(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        formatPriceCheckout(total),
+                        formatPrice(total),
                         fontWeight = FontWeight.Bold,
                         fontSize = 24.sp,
                         color = Accent,
@@ -838,7 +832,7 @@ private fun ConfirmationStepContent(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        formatPriceCheckout(total),
+                        formatPrice(total),
                         fontWeight = FontWeight.Bold,
                         fontSize = 24.sp,
                         color = Accent,
@@ -898,7 +892,7 @@ private fun ConfirmationStepContent(
                             )
                         }
                         Text(
-                            "${formatPriceCheckout(item.price * item.quantity)} ج.س",
+                            formatPrice(item.price * item.quantity),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = Accent,

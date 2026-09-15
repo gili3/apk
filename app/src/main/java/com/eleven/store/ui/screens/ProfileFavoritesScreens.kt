@@ -45,18 +45,7 @@ import kotlinx.coroutines.launch
 // ═══════════════════════════════════════════════════════════════
 //  دالة مساعدة لتنسيق الأسعار
 // ═══════════════════════════════════════════════════════════════
-private fun formatPriceProfile(value: Any?): String {
-    val d = when (value) {
-        is Double -> value
-        is Long   -> value.toDouble()
-        is Int    -> value.toDouble()
-        is String -> value.toDoubleOrNull() ?: 0.0
-        else      -> 0.0
-    }
-    val s = if (d == d.toLong().toDouble()) d.toLong().toString()
-            else "%,.2f".format(d)
-    return "$s ج.س"
-}
+// ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
 
 // ═══════════════════════════════════════════════════════════════
 //  PROFILE SCREEN — نسخة طبق الأصل من Profile.tsx
@@ -852,7 +841,7 @@ private fun FavoriteProductItem(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = formatPriceProfile(product.price),
+                    text = formatPrice(product.price),
                     color = Accent,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 18.sp,

@@ -43,17 +43,7 @@ import kotlinx.coroutines.launch
 // ═══════════════════════════════════════════════════════════════
 //  دالة مساعدة لتنسيق الأسعار — مطابقة لـ formatNumber في الموقع
 // ═══════════════════════════════════════════════════════════════
-private fun formatPriceDetail(value: Any?): String {
-    val d = when (value) {
-        is Double -> value
-        is Long -> value.toDouble()
-        is Int -> value.toDouble()
-        is String -> value.toDoubleOrNull() ?: 0.0
-        else -> 0.0
-    }
-    return if (d == d.toLong().toDouble()) d.toLong().toString()
-    else "%.2f".format(d)
-}
+// ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
 
 // ═══════════════════════════════════════════════════════════════
 //  PRODUCT DETAIL SCREEN — نسخة طبق الأصل من ProductDetail.tsx
@@ -412,31 +402,39 @@ fun ProductDetailScreen(
                                 .padding(horizontal = 24.dp, vertical = 24.dp),
                         ) {
                             // ── شارة الحالة — مطابقة للموقع ──
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                val badgeLabel = when {
-                                    p.isNew -> "جديد"
-                                    p.isOnSale -> "عرض خاص"
-                                    p.isBestSeller -> "الأكثر مبيعاً"
-                                    else -> "مميز"
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .background(Destructive, RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                                ) {
-                                    Text(
-                                        badgeLabel,
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
+                            // ✅ إصلاح: كانت تعرض شارة "مميز" لأي منتج عادي
+                            // لا يملك فعلياً أياً من الحالات (جديد/عرض/أكثر
+                            // مبيعاً/مميز) — لأن else كانت ترجع "مميز" دائماً
+                            // بدل فحص p.isFeatured الحقيقي. الآن لا تظهر أي
+                            // شارة إطلاقاً لو لم تنطبق أي حالة فعلية، تماماً
+                            // كما بشاشتي الرئيسية والمنتجات.
+                            val badgeLabel = when {
+                                p.isNew -> "جديد"
+                                p.isOnSale -> "عرض خاص"
+                                p.isBestSeller -> "الأكثر مبيعاً"
+                                p.isFeatured -> "مميز"
+                                else -> null
                             }
-
-                            Spacer(Modifier.height(16.dp))
+                            if (badgeLabel != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(Destructive, RoundedCornerShape(8.dp))
+                                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    ) {
+                                        Text(
+                                            badgeLabel,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(16.dp))
+                            }
 
                             // ── اسم المنتج — مطابق للموقع: text-2xl font-bold Georgia ──
                             Text(
@@ -456,14 +454,14 @@ fun ProductDetailScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
                                 Text(
-                                    text = "${formatPriceDetail(p.price)} ج.س",
+                                    text = formatPrice(p.price),
                                     fontSize = 24.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = Accent,
                                 )
                                 if (p.originalPrice != null && p.originalPrice!! > p.price) {
                                     Text(
-                                        text = "${formatPriceDetail(p.originalPrice)} ج.س",
+                                        text = formatPrice(p.originalPrice),
                                         fontSize = 18.sp,
                                         color = MutedForeground,
                                         textDecoration = TextDecoration.LineThrough,

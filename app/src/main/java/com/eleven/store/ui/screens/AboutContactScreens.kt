@@ -617,6 +617,17 @@ fun ContactScreen(
     var email by remember { mutableStateOf("") }
     var subject by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+
+    // ✅ نفس نمط فحص صيغة البريد المستخدم بشاشات المصادقة (AuthValidation)
+    fun isValidEmail(e: String) = Regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$").matches(e.trim())
+
+    fun submitError(): String? = when {
+        name.trim().isBlank() -> "يرجى إدخال الاسم"
+        !isValidEmail(email) -> "يرجى إدخال بريد إلكتروني صحيح"
+        message.trim().isBlank() -> "يرجى كتابة رسالتك"
+        else -> null
+    }
 
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
@@ -915,17 +926,34 @@ fun ContactScreen(
                             // Submit Button — py-6 = 48dp
                             Button(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        snackbarHostState.showMessage(
-                                            "تم إرسال رسالتك بنجاح، سنقوم بالرد عليك قريباً",
-                                            SnackbarType.SUCCESS
-                                        )
+                                    val err = submitError()
+                                    if (err != null) {
+                                        coroutineScope.launch { snackbarHostState.showMessage(err, SnackbarType.ERROR) }
+                                        return@Button
                                     }
-                                    name = ""
-                                    email = ""
-                                    subject = ""
-                                    message = ""
+                                    isSending = true
+                                    viewModel.sendContactMessage(name, email, subject, message) { ok, msg ->
+                                        isSending = false
+                                        coroutineScope.launch {
+                                            if (ok) {
+                                                snackbarHostState.showMessage(
+                                                    "تم إرسال رسالتك بنجاح، سنقوم بالرد عليك قريباً",
+                                                    SnackbarType.SUCCESS
+                                                )
+                                                name = ""
+                                                email = ""
+                                                subject = ""
+                                                message = ""
+                                            } else {
+                                                snackbarHostState.showMessage(
+                                                    msg ?: "تعذّر إرسال رسالتك، حاول مرة أخرى",
+                                                    SnackbarType.ERROR
+                                                )
+                                            }
+                                        }
+                                    }
                                 },
+                                enabled = !isSending,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(48.dp),
@@ -935,17 +963,25 @@ fun ContactScreen(
                                     contentColor = Color.White,
                                 ),
                             ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Send,
-                                    null,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "إرسال الرسالة",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                )
+                                if (isSending) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.White,
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.Send,
+                                        null,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "إرسال الرسالة",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                    )
+                                }
                             }
 
                             Spacer(Modifier.height(24.dp))

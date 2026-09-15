@@ -24,7 +24,20 @@ class MainViewModel : ViewModel() {
     )
 
     // ✅ بيانات الملف الشخصي من Firestore (فيها رقم الهاتف الحقيقي)
-    val userProfile = repo.observeUserProfile().stateIn(
+    // 🐛 إصلاح: كانت repo.observeUserProfile() تُستدعى مرة واحدة فقط عند
+    // إنشاء الـViewModel (أي عند فتح التطبيق، سواء كان المستخدم مسجّلاً
+    // دخوله أصلاً أم لا). observeUserProfile تقرأ uid لحظة بدء الـFlow فقط:
+    // لو كان المستخدم غير مسجَّل دخوله وقتها، تُرسل null وتتوقف عند
+    // "awaitClose {}" بلا أي إعادة تحقق لاحقة من uid. بما أن هذا الـViewModel
+    // يعيش طوال الجلسة (يُنشأ مرة واحدة بجذر ElevenApp، قبل شاشات الدخول
+    // وبعدها)، أي تسجيل دخول جديد ضمن نفس فتحة التطبيق كان يترك userProfile
+    // عالقاً على null للأبد (رقم الهاتف الحقيقي ما يظهر إلا بعد إغلاق
+    // التطبيق وإعادة فتحه). الآن نربطه بـcurrentUser (تدفّق تسجيل الدخول/
+    // الخروج الحقيقي) عبر flatMapLatest ليعيد فتح المستمع تلقائياً عند أي
+    // تغيّر فعلي بحالة تسجيل الدخول.
+    val userProfile = currentUser.flatMapLatest {
+        repo.observeUserProfile()
+    }.stateIn(
         viewModelScope, SharingStarted.Eagerly, null
     )
 
@@ -328,10 +341,18 @@ class MainViewModel : ViewModel() {
     val cartError: StateFlow<String?> = _cartError
     private val _cartRetryTrigger = MutableStateFlow(0)
 
-    val cartItems: StateFlow<List<CartItem>> = _cartRetryTrigger.flatMapLatest {
-        repo.observeCart(onError = { e -> _cartError.value = e.message ?: "تعذّر تحميل السلة" })
-            .onEach { _cartError.value = null }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    // 🐛 إصلاح: نفس مشكلة userProfile أعلاه بالضبط — _cartRetryTrigger وحده
+    // لا يتغيّر تلقائياً عند تسجيل الدخول، فقط عند ضغط المستخدم "إعادة
+    // المحاولة" يدوياً. أي مستخدم يسجّل حساباً جديداً أو يدخل لأول مرة ضمن
+    // نفس فتحة التطبيق كان يرى سلّة فارغة دائماً (حتى لو فيها عناصر فعلية
+    // بـFirestore) لأن المستمع فُتح أصلاً وuid=null قبل تسجيل الدخول ولم
+    // يُعَد فتحه. الآن combine مع currentUser يضمن إعادة الفتح تلقائياً عند
+    // الدخول/الخروج، مع إبقاء retryCart() يدوياً لحالات فشل الشبكة اللحظية.
+    val cartItems: StateFlow<List<CartItem>> = combine(_cartRetryTrigger, currentUser) { _, _ -> Unit }
+        .flatMapLatest {
+            repo.observeCart(onError = { e -> _cartError.value = e.message ?: "تعذّر تحميل السلة" })
+                .onEach { _cartError.value = null }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun retryCart() {
         _cartError.value = null
@@ -358,10 +379,13 @@ class MainViewModel : ViewModel() {
     val favoritesError: StateFlow<String?> = _favoritesError
     private val _favoritesRetryTrigger = MutableStateFlow(0)
 
-    val favoriteIds: StateFlow<Set<String>> = _favoritesRetryTrigger.flatMapLatest {
-        repo.observeFavorites(onError = { e -> _favoritesError.value = e.message ?: "تعذّر تحميل المفضلة" })
-            .onEach { _favoritesError.value = null }
-    }.map { it.toSet() }
+    // 🐛 إصلاح: نفس مشكلة cartItems أعلاه — ربط بـcurrentUser بدل الاعتماد
+    // فقط على retry اليدوي، حتى تتحدّث المفضّلة تلقائياً بعد تسجيل الدخول.
+    val favoriteIds: StateFlow<Set<String>> = combine(_favoritesRetryTrigger, currentUser) { _, _ -> Unit }
+        .flatMapLatest {
+            repo.observeFavorites(onError = { e -> _favoritesError.value = e.message ?: "تعذّر تحميل المفضلة" })
+                .onEach { _favoritesError.value = null }
+        }.map { it.toSet() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     fun retryFavorites() {
@@ -435,7 +459,12 @@ class MainViewModel : ViewModel() {
     // Eagerly (كـcartCount/favoriteIds أعلاه): يبدأ فور إنشاء الـViewModel
     // (أي فور تسجيل الدخول عملياً)، بغض النظر عن زيارة شاشة الإشعارات أم لا
     // — ليظهر رقم صحيح فوراً على أي badge مستقبلي (هيدر/تبويب سفلي).
-    val unreadCount: StateFlow<Int> = repo.observeUnreadCount()
+    // 🐛 إصلاح: كانت مربوطة مباشرة بدون أي إعادة اشتراك — نفس علّة
+    // userProfile/cartItems/favoriteIds: مستمع وحيد يُفتح لحظة إنشاء
+    // الـViewModel، فلو لم يكن هناك تسجيل دخول وقتها يبقى العداد عالقاً على
+    // 0 حتى بعد الدخول لاحقاً بنفس الجلسة. الآن يُعاد فتحه تلقائياً مع
+    // currentUser.
+    val unreadCount: StateFlow<Int> = currentUser.flatMapLatest { repo.observeUnreadCount() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     // ✅ إصلاح: كان أي خطأ بمستمع الإشعارات (مثال: فهرس Firestore مركّب غير
@@ -751,6 +780,13 @@ class MainViewModel : ViewModel() {
             } catch (e: Exception) {
                 _addressesError.value = repo.friendlyLoadError(e)
             }
+        }
+    }
+
+    fun sendContactMessage(name: String, email: String, subject: String, message: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.sendContactMessage(name, email, subject, message); onResult(true, null) }
+            catch (e: Exception) { onResult(false, e.message ?: "تعذّر إرسال رسالتك، حاول مرة أخرى") }
         }
     }
 

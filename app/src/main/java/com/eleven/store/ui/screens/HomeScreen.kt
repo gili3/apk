@@ -65,6 +65,10 @@ fun HomeScreen(
     onProductClick: (String) -> Unit,
     onCategoryClick: (String) -> Unit,
     onViewAllClick: (String) -> Unit,
+    // ✅ جديد: "عرض المزيد" بقسم التصنيفات صار يفتح شاشة تصنيفات/علامات
+    // تجارية مخصّصة (شبكة بطاقات بصورة) بدل صفحة المنتجات العامة بلا فلتر
+    // — تصفح بصري مباشر بدل الاعتماد على منسدل الفلاتر داخل شاشة المنتجات.
+    onViewCategories: () -> Unit,
     // ✅ جديد: يُستدعى عند الضغط على بانر/زر بانر يحمل رابطاً (banner.link)
     // — مسار داخلي مثل "/product/xxx" أو "/category/xxx"، أو رابط خارجي كامل
     // (https://...). المنطق الفعلي لفكّ هذا الرابط (تنقّل داخلي أو فتح متصفح)
@@ -182,7 +186,7 @@ fun HomeScreen(
         // ── 2. التصنيفات — أول 4 فقط ────────────────────────────
         if (categories.isNotEmpty()) {
             item {
-                HomeSectionHeader(title = "التصنيفات", onViewAll = { onViewAllClick("") })
+                HomeSectionHeader(title = "التصنيفات", onViewAll = onViewCategories)
                 CategoriesRow(
                     categories = categories.take(4),
                     onCategoryClick = onCategoryClick,
@@ -257,7 +261,11 @@ fun HomeScreen(
         // ── 7. العلامات التجارية ─────────────────────────────────
         if (brands.isNotEmpty()) {
             item {
-                HomeSectionHeader(title = "العلامات التجارية", onViewAll = { onViewAllClick("brands") })
+                // ✅ "عرض المزيد" هنا يفتح نفس شاشة التصنيفات/العلامات
+                // التجارية الجديدة (مباشرة على قسم العلامات) بدل صفحة
+                // المنتجات بفلتر "brands" المجرَّد — نفس شاشة تصفّح واحدة
+                // لكل من التصنيفات والعلامات، بدل وجهتين مختلفتين لهما.
+                HomeSectionHeader(title = "العلامات التجارية", onViewAll = onViewCategories)
                 BrandsRow(brands = brands.take(3))
                 Spacer(Modifier.height(8.dp))
             }
@@ -786,14 +794,14 @@ private fun HomeProductCard(
                     // السعر — يسار
                     Column {
                         Text(
-                            text = "${formatNum(product.price)} ج.س",
+                            text = formatPrice(product.price),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Accent,
                         )
                         if (discount != null && discount > 0 && product.originalPrice != null) {
                             Text(
-                                text = "${formatNum(product.originalPrice)} ج.س",
+                                text = formatPrice(product.originalPrice),
                                 fontSize = 12.sp,
                                 color = MutedForeground,
                                 textDecoration = TextDecoration.LineThrough,
@@ -868,13 +876,4 @@ private fun BrandsRow(brands: List<Brand>) {
 }
 
 // ── مساعد تنسيق الأرقام ───────────────────────────────────────
-internal fun formatNum(value: Any?): String {
-    val d = when (value) {
-        null -> return "0"
-        is Number -> value.toDouble()
-        is String -> value.toDoubleOrNull() ?: 0.0
-        else -> 0.0
-    }
-    return if (d == d.toLong().toDouble()) d.toLong().toString()
-    else "%.2f".format(d)
-}
+// ملاحظة: تنسيق الأرقام أصبح موحداً عبر formatNumber()/formatPrice() في ScreenCommon.kt

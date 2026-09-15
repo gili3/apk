@@ -58,6 +58,7 @@ object Route {
     const val NOTIFICATIONS  = "notifications"
     const val ABOUT          = "about"
     const val CONTACT        = "contact"
+    const val CATEGORIES     = "categories"
 
     fun productDetail(id: String) = "product/$id"
     fun orderDetail(id: String) = "order/$id"
@@ -116,6 +117,7 @@ fun ElevenNavGraph(
                 onViewAllClick = { filter ->
                     navController.navigate("${Route.PRODUCTS}?filter=${android.net.Uri.encode(filter)}")
                 },
+                onViewCategories = { navController.navigate(Route.CATEGORIES) },
                 // ✅ جديد: فكّ رابط البانر (banner.link من لوحة التحكم) — رابط
                 // خارجي كامل (http/https) يُفتح بمتصفح خارجي، وأي شيء آخر
                 // يُعامَل كمسار داخلي للتطبيق (بعد إزالة الشرطة الأولى إن
@@ -147,11 +149,12 @@ fun ElevenNavGraph(
             )
         }
         composable(
-            route = "${Route.PRODUCTS}?category={category}&filter={filter}&search={search}",
+            route = "${Route.PRODUCTS}?category={category}&filter={filter}&search={search}&brand={brand}",
             arguments = listOf(
                 navArgument("category") { defaultValue = ""; nullable = true },
                 navArgument("filter") { defaultValue = ""; nullable = true },
                 navArgument("search") { defaultValue = ""; nullable = true },
+                navArgument("brand") { defaultValue = ""; nullable = true },
             )
         ) { back ->
             ProductsScreen(
@@ -159,9 +162,23 @@ fun ElevenNavGraph(
                 initialCategory = back.arguments?.getString("category") ?: "",
                 initialFilter = back.arguments?.getString("filter") ?: "",
                 initialSearch = back.arguments?.getString("search") ?: "",
+                initialBrand = back.arguments?.getString("brand") ?: "",
                 onProductClick = { navController.navigate(Route.productDetail(it)) },
                 onBack = { navController.popBackStack() },
                 onGoHome = { navController.navigate(Route.HOME) { popUpTo(Route.HOME) { inclusive = true } } },
+            )
+        }
+        // ✅ جديد: شاشة تصفح التصنيفات + العلامات التجارية (شبكة بطاقات)
+        composable(Route.CATEGORIES) {
+            CategoriesScreen(
+                viewModel = viewModel,
+                onCategoryClick = {
+                    navController.navigate("${Route.PRODUCTS}?category=${android.net.Uri.encode(it)}")
+                },
+                onBrandClick = {
+                    navController.navigate("${Route.PRODUCTS}?filter=brands&brand=${android.net.Uri.encode(it)}")
+                },
+                onBack = { navController.popBackStack() },
             )
         }
         composable(

@@ -40,18 +40,7 @@ import com.eleven.store.ui.viewmodel.MainViewModel
 // ═══════════════════════════════════════════════════════════════
 
 /** تنسيق السعر بالعملة — "1,234.56 ج.س" */
-private fun formatPriceOrders(value: Any?): String {
-    val d = when (value) {
-        is Double -> value
-        is Long   -> value.toDouble()
-        is Int    -> value.toDouble()
-        is String -> value.toDoubleOrNull() ?: 0.0
-        else      -> 0.0
-    }
-    val s = if (d == d.toLong().toDouble()) d.toLong().toString()
-            else "%,.2f".format(d)
-    return "$s ج.س"
-}
+// ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
 
 /** تسمية طريقة الدفع */
 private fun paymentMethodLabel(method: String): String = when (method) {
@@ -235,7 +224,7 @@ fun OrdersScreen(
                         val dateObj = order.createdAt?.toDate() ?: java.util.Date()
                         val itemCount = order.items.size
                         val total = if (order.total > 0) order.total
-                                    else order.items.sumOf { it.price * it.quantity }
+                                    else order.items.sumOf { it.price * it.quantity } + order.shippingCost
 
                         Card(
                             modifier = Modifier
@@ -287,7 +276,7 @@ fun OrdersScreen(
                                 ) {
                                     if (total > 0) {
                                         Text(
-                                            formatPriceOrders(total),
+                                            formatPrice(total),
                                             fontWeight = FontWeight.Bold,
                                             color = Accent,
                                             fontSize = 14.sp,
@@ -369,7 +358,7 @@ fun OrderDetailScreen(
                 val dateObj = o.createdAt?.toDate() ?: java.util.Date()
                 val formattedDate = formatArabicDate(dateObj)
                 val subtotal = o.items.sumOf { it.price * it.quantity }
-                val total = if (o.total > 0) o.total else subtotal + o.shippingCost
+                val total = if (o.total > 0) o.total else subtotal - o.discount + o.shippingCost
 
                 LazyColumn(
                     contentPadding = PaddingValues(
@@ -660,8 +649,8 @@ private fun InvoiceCard(
                 ) {
                     Text(item.name, Modifier.weight(2f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onBackground)
                     Text("${item.quantity}", Modifier.weight(1f), fontSize = 14.sp, color = MutedForeground, textAlign = TextAlign.Center)
-                    Text(formatPriceOrders(item.price), Modifier.weight(1.2f), fontSize = 14.sp, color = MutedForeground, textAlign = TextAlign.Center)
-                    Text(formatPriceOrders(item.price * item.quantity), Modifier.weight(1.2f), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                    Text(formatPrice(item.price), Modifier.weight(1.2f), fontSize = 14.sp, color = MutedForeground, textAlign = TextAlign.Center)
+                    Text(formatPrice(item.price * item.quantity), Modifier.weight(1.2f), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
                 }
                 HorizontalDivider(color = Border)
             }
@@ -675,16 +664,35 @@ private fun InvoiceCard(
                     Arrangement.SpaceBetween,
                 ) {
                     Text("المجموع الفرعي", fontSize = 14.sp, color = MutedForeground)
-                    Text(formatPriceOrders(subtotal), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
+                    Text(formatPrice(subtotal), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
                 }
                 HorizontalDivider(color = Border)
+                if (order.discount > 0) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            if (order.couponCode.isNullOrBlank()) "الخصم" else "الخصم (${order.couponCode})",
+                            fontSize = 14.sp,
+                            color = MutedForeground,
+                        )
+                        Text(
+                            "-${formatPrice(order.discount)}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Success,
+                        )
+                    }
+                    HorizontalDivider(color = Border)
+                }
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 10.dp),
                     Arrangement.SpaceBetween,
                 ) {
                     Text("الشحن", fontSize = 14.sp, color = MutedForeground)
                     Text(
-                        if (order.shippingCost > 0) formatPriceOrders(order.shippingCost) else "مجاني",
+                        if (order.shippingCost > 0) formatPrice(order.shippingCost) else "مجاني",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onBackground,
@@ -701,7 +709,7 @@ private fun InvoiceCard(
                     Alignment.CenterVertically,
                 ) {
                     Text("الإجمالي", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-                    Text(formatPriceOrders(total), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = brandColor)
+                    Text(formatPrice(total), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = brandColor)
                 }
             }
 

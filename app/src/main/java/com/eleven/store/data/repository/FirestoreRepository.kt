@@ -1027,6 +1027,27 @@ class FirestoreRepository {
         }
     }
 
+    // ─── Contact — رسائل "اتصل بنا" ────────────────────────────
+    // ✅ إصلاح حرج: زر "إرسال الرسالة" بشاشة اتصل بنا كان يعرض رسالة نجاح
+    // فورية بلا أي استدعاء فعلي — الرسالة كانت تُمسح من الشاشة ولا تُخزَّن
+    // أو تُرسَل لأي مكان إطلاقاً (لا يوجد أي endpoint لها لا بالتطبيق ولا
+    // بالسيرفر أصلاً). الآن تُكتب فعلياً في مجموعة "contactMessages"
+    // (متاحة بالقراءة فقط من لوحة التحكم عبر Admin SDK — راجع firestore.rules)
+    // مع createdAt وuid المرسل (إن كان مسجّل دخول) لتتبعها لاحقاً.
+    suspend fun sendContactMessage(name: String, email: String, subject: String, message: String) {
+        requireOnline()
+        val data = hashMapOf(
+            "name" to name.trim(),
+            "email" to email.trim(),
+            "subject" to subject.trim(),
+            "message" to message.trim(),
+            "userId" to uid,
+            "status" to "new",
+            "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+        )
+        db.collection("contactMessages").document().set(data).await()
+    }
+
     suspend fun addAddress(address: Address): String {
         requireOnline()
         val u = uid ?: return ""

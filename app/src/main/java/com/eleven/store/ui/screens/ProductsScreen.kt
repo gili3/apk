@@ -53,6 +53,10 @@ fun ProductsScreen(
     initialCategory: String = "",
     initialFilter: String = "",
     initialSearch: String = "",
+    // ✅ جديد: علامة تجارية محدَّدة مسبقاً (من بطاقة علامة بشاشة
+    // CategoriesScreen) — يفتح مباشرة على منتجات هذه العلامة بدل الاكتفاء
+    // بوضع فلتر "برامز" العام ثم تركه للمستخدم يختار من المنسدل يدوياً.
+    initialBrand: String = "",
     onProductClick: (String) -> Unit,
     onBack: () -> Unit,
     onGoHome: () -> Unit = onBack,
@@ -73,10 +77,16 @@ fun ProductsScreen(
     var selectedCategory by rememberSaveable(initialCategory) {
         mutableStateOf(if (initialCategory.isNotBlank()) initialCategory else "all")
     }
-    var filterType by rememberSaveable(initialFilter) {
-        mutableStateOf(if (initialFilter.isNotBlank()) initialFilter else "all")
+    var filterType by rememberSaveable(initialFilter, initialBrand) {
+        mutableStateOf(
+            if (initialBrand.isNotBlank()) "brands"
+            else if (initialFilter.isNotBlank()) initialFilter
+            else "all"
+        )
     }
-    var selectedBrand by rememberSaveable(initialFilter) { mutableStateOf("all") }
+    var selectedBrand by rememberSaveable(initialFilter, initialBrand) {
+        mutableStateOf(if (initialBrand.isNotBlank()) initialBrand else "all")
+    }
     var searchQuery by rememberSaveable(initialSearch) { mutableStateOf(initialSearch) }
 
     // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من هذه الشاشة
@@ -713,14 +723,14 @@ private fun ProductsScreenProductCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
-                        text = "${formatNum(product.price)} ج.س",
+                        text = formatPrice(product.price),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = Accent,
                     )
                     if (discount != null && discount > 0 && product.originalPrice != null) {
                         Text(
-                            text = "${formatNum(product.originalPrice)}",
+                            text = formatNumber(product.originalPrice),
                             fontSize = 12.sp,
                             color = MutedForeground,
                             textDecoration = TextDecoration.LineThrough,
@@ -787,4 +797,4 @@ private fun ProductsScreenProductCard(
     }
 }
 
-// ملاحظة: formatNum مُعرّفة بشكل مشترك في HomeScreen.kt
+// ملاحظة: formatPrice/formatNumber مُعرّفتان بشكل مشترك في ScreenCommon.kt

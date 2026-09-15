@@ -42,18 +42,7 @@ import kotlinx.coroutines.launch
 // ملاحظة: formatPrice مُعرّفة بشكل مشترك في ScreenCommon.kt
 
 // دالة مساعدة لتنسيق الأرقام بدون عملة
-private fun formatNumber(value: Any?): String {
-    val number = when (value) {
-        is String -> value.toDoubleOrNull() ?: 0.0
-        is Number -> value.toDouble()
-        else -> 0.0
-    }
-    return if (number == number.toLong().toDouble()) {
-        number.toLong().toString()
-    } else {
-        "%.2f".format(number)
-    }
-}
+// ملاحظة: تنسيق الأرقام أصبح موحداً عبر formatNumber() في ScreenCommon.kt
 
 // ═══════════════════════════════════════════════════════════════
 //  الكوبونات لم تعد أكواداً ثابتة بالكود — تُقرأ وتُتحقق من مجموعة

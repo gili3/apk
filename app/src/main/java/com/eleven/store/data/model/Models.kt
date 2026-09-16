@@ -209,10 +209,27 @@ data class NotificationItem(
     val body: String = "",
     val type: String = "",
     val isRead: Boolean = false,
+    // 🐛 إصلاح جذري (سبب انهيار التطبيق فوراً عند تسجيل الدخول): كلا الحقلين
+    // كانا معرَّفين هنا كـString غير قابل للـnull (بقيمة افتراضية "")، بينما
+    // كل من functions/src/lib/notifications.ts وserver/notification-service.ts
+    // يكتبان دائماً "actionRoute: input.actionRoute ?? null" و
+    // "imageUrl: input.imageUrl ?? null" — أي قيمة null صريحة بالمستند نفسه
+    // (وليس حقلاً غائباً تماماً) كلما لم يُمرَّر أيهما، وهي الحالة الشائعة
+    // فعلاً: imageUrl لا يُمرَّر إطلاقاً لأي إشعار طلب (تأكيد طلب/تغيّر حالة)،
+    // وactionRoute نفسه اختياري بالبث اليدوي من لوحة التحكم (adminNotificationsRouter).
+    // القيمة الافتراضية Kotlin ("") تُستخدَم فقط عندما يكون الحقل *غائباً*
+    // تماماً عن المستند — أما عندما يكون موجوداً بقيمة null صريحة فإن
+    // toObject() يحاول إسناد null لنوع غير قابل للـnull ويرمي استثناءً فوراً
+    // داخل addSnapshotListener (observeNotifications)، وهو استثناء غير
+    // مُلتقَط بأي try/catch فيسقط التطبيق بالكامل. يحدث هذا تلقائياً لحظة
+    // تسجيل الدخول (ElevenApp.LaunchedEffect(user) يستدعي loadNotifications
+    // فوراً)، لأي مستخدم لديه أي إشعار طلب واحد على الأقل — ما يطابق تماماً:
+    // "ينهار فوراً عند تسجيل الدخول، ويعود الانهيار نفسه بعد مسح البيانات
+    // وإعادة تسجيل الدخول لنفس الحساب" (نفس المستندات الحقيقية تُعاد قراءتها).
     /** مسار داخلي يُفتح عند الضغط على الإشعار، مثال: "/order/abc123" */
-    val actionRoute: String = "",
+    val actionRoute: String? = null,
     /** رابط صورة اختيارية (إشعارات العروض غالباً) — مطابق لـshared/types.ts::AppNotification.imageUrl */
-    val imageUrl: String = "",
+    val imageUrl: String? = null,
     val createdAt: Timestamp? = null,
 ) {
     /** اسم بديل لمحتوى الإشعار (نفس body) */

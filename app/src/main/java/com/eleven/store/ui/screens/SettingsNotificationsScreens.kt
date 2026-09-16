@@ -1335,7 +1335,7 @@ fun NotificationsScreen(
                                 // بدون إزالتها هنا كان التنقل يفشل بصمت (لا يحدث شيء عند الضغط)،
                                 // رغم أن نفس المسار يعمل من تنبيه النظام لأن
                                 // ElevenFirebaseMessagingService يزيل الشرطة هناك فقط.
-                                notif.actionRoute.removePrefix("/").takeIf { it.isNotBlank() }?.let(onOpenRoute)
+                                notif.actionRoute?.removePrefix("/")?.takeIf { it.isNotBlank() }?.let(onOpenRoute)
                             },
                             onDelete = {
                                 viewModel.deleteNotification(notif.id)
@@ -1424,7 +1424,7 @@ private fun SwipeableNotificationCard(
                     // العنصر ضمن LazyColumn، مع placeholder/error موحّدين بنفس
                     // نمط بطاقات المنتجات أعلاه؛ لا يُكسر شيء إن فشل التحميل —
                     // فقط تبقى الأيقونة الرمزية ظاهرة كما كانت دائماً.
-                    if (notif.imageUrl.isNotBlank()) {
+                    if (!notif.imageUrl.isNullOrBlank()) {
                         Box(
                             modifier = Modifier
                                 .size(44.dp)

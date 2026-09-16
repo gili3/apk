@@ -1320,8 +1320,21 @@ class FirestoreRepository {
                     onError(error)
                     return@addSnapshotListener
                 }
-                val items = snap?.documents?.mapNotNull {
-                    it.toObject(NotificationItem::class.java)?.copy(id = it.id)
+                // ✅ تحصين إضافي (دفاع ثانٍ بعد إصلاح actionRoute/imageUrl بالأعلى
+                // في Models.kt): toObject() يرمي استثناءً غير مُلتقَط تلقائياً
+                // لأي مستند لا يطابق شكل NotificationItem تماماً — وهذا الاستثناء
+                // يحدث هنا داخل callback مباشر من Firestore SDK نفسه (ليس داخل
+                // كوروتين قابل لالتقاطه من مستوى أعلى)، فيُسقِط التطبيق بالكامل.
+                // بدل تعطّل القائمة كلها بسبب مستند واحد غير متوقّع مستقبلاً
+                // (تعديل يدوي بالبيانات، حقل جديد بنوع مختلف...)، نتجاهل ذلك
+                // المستند تحديداً فقط ونعرض الباقي بأمان.
+                val items = snap?.documents?.mapNotNull { doc ->
+                    try {
+                        doc.toObject(NotificationItem::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.e("FirestoreRepo", "تعذّر تحويل إشعار ${doc.id}، تم تجاهله", e)
+                        null
+                    }
                 } ?: emptyList()
                 trySend(items)
             }

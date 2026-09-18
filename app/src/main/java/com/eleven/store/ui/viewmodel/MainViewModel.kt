@@ -768,6 +768,10 @@ class MainViewModel : ViewModel() {
                 if (useCoupon) clearCoupon()
                 onResult(true, id)
             } catch (e: Exception) {
+                // ✅ إضافة (بطلب الأدمن): فشل إنشاء طلب فعلي مهم جداً معرفته —
+                // يظهر الآن بصفحة "سجل الأخطاء" بلوحة التحكم، غير قاتل (المستخدم
+                // يرى رسالة الخطأ عادةً ويمكنه المحاولة مرة أخرى، لا كراش).
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "placeOrder")
                 onResult(false, e.message ?: "حدث خطأ")
             }
         }

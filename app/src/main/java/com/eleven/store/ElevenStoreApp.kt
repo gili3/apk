@@ -41,6 +41,9 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         appContext = applicationContext
+        // ✅ إضافة (بطلب الأدمن: كل أخطاء التطبيق تظهر بلوحة التحكم) — يجب أن
+        // يكون أول شيء فعلياً بعد ضبط appContext، قبل أي كود آخر قد يفشل.
+        com.eleven.store.util.CrashReporter.install(BuildConfig.VERSION_NAME)
         createNotificationChannel()
         initFirebaseAppCheck()
         configureFirestoreCache()

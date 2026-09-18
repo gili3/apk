@@ -152,6 +152,22 @@ fun ElevenApp(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // ✅ إصلاح (تنقل الهيدر): نفس حارس الـdebounce المستخدم بالشريط السفلي
+    // والقائمة الجانبية — يمنع تراكم وجهات مكرّرة بالـBack Stack عند نقر
+    // متكرر سريع على أيقونتَي السلة/الإشعارات بالهيدر، ويعيد استخدام الوجهة
+    // إن كانت محفوظة أصلاً (saveState/restoreState) بدل إنشاء نسخة جديدة.
+    var lastHeaderNavTimestamp by remember { mutableStateOf(0L) }
+    fun navigateHeaderTarget(route: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastHeaderNavTimestamp < 300L) return
+        lastHeaderNavTimestamp = now
+        navController.navigate(route) {
+            popUpTo(Route.HOME) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -172,8 +188,17 @@ fun ElevenApp(
                     hasUser = user != null,
                     unreadCount = unreadCount,
                     onMenuClick = { scope.launch { drawerState.open() } },
-                    onCartClick = { navController.navigate(Route.CART) },
-                    onNotificationsClick = { navController.navigate(Route.NOTIFICATIONS) },
+                    // ✅ إصلاح (تنقل الهيدر): كانت هذه الأزرار تستخدم navigate() مباشرة
+                    // بلا launchSingleTop/popUpTo — بخلاف الشريط السفلي والقائمة الجانبية.
+                    // فكل نقرة على السلة أو الإشعارات من الهيدر (حتى لو كنّا فيها أصلاً،
+                    // أو نتنقّل بينها وبين الرئيسية بشكل متكرر) كانت تدفع وجهة جديدة فوق
+                    // الـBack Stack بدل إعادة استخدام الموجودة، فتتراكم نسخ مكرّرة يجب
+                    // الرجوع خلالها بزر الرجوع للخروج فعلياً — يبدو للمستخدم أن الزر
+                    // "لا يستجيب مباشرة" رغم أنه فعلياً ينقل، لكن لصفحة مكرّرة فوق نفس
+                    // الصفحة. الآن نستخدم نفس نمط navigateDebounced في الشريط السفلي.
+                    onCartClick = { navigateHeaderTarget(Route.CART) },
+                    onNotificationsClick = { navigateHeaderTarget(Route.NOTIFICATIONS) },
+                    onLogoClick = { navigateHeaderTarget(Route.HOME) },
                     onSearchSubmit = { query ->
                         // ✅ إصلاح: ترميز نص البحث قبل دمجه بمسار التنقل يدوياً —
                         // بحث يحتوي مسافة أو رمز &/#/% كان يكسر تحليل الاستعلام.
@@ -224,6 +249,7 @@ fun ElevenHeader(
     onMenuClick: () -> Unit,
     onCartClick: () -> Unit,
     onNotificationsClick: () -> Unit,
+    onLogoClick: () -> Unit,
     onSearchSubmit: (String) -> Unit,
 ) {
     var isSearchOpen by remember { mutableStateOf(false) }
@@ -315,11 +341,11 @@ fun ElevenHeader(
 
                 // ═══ CENTER: Logo 11/ELEVEN ═══
                 Box(
-                    modifier = Modifier.clickable {
-                        navController.navigate(Route.HOME) {
-                            popUpTo(Route.HOME) { inclusive = true }
-                        }
-                    },
+                    // ✅ إصلاح: كان النقر هنا يستدعي navigate() مباشرة (منطق منفصل
+                    // ومختلف عن باقي أزرار الهيدر)، والآن يُفوَّض لنفس دالة
+                    // navigateHeaderTarget المعرَّفة في ElevenApp (debounce +
+                    // launchSingleTop + saveState/restoreState)، عبر onLogoClick.
+                    modifier = Modifier.clickable { onLogoClick() },
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(

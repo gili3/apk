@@ -895,7 +895,14 @@ fun SettingsScreen(
                         } else if (isGoogleAccount) {
                             isDeleting = true
                             val googleClient = buildGoogleSignInClient(context)
-                            deleteGoogleLauncher.launch(googleClient.signInIntent)
+                            // ✅ إصلاح (تناسق مع تسجيل الدخول/التسجيل أعلى الملف): بلا
+                            // signOut() هنا، GoogleSignInClient يعيد الحساب المخزَّن مسبقاً
+                            // بصمت تام أحياناً (بلا أي شاشة تأكيد) — ما يُفقِد إعادة
+                            // المصادقة معناها الأمني الحقيقي (التأكد أن المستخدم لا يزال
+                            // يملك وصولاً فعلياً لحساب جوجل قبل حذف حسابه نهائياً).
+                            googleClient.signOut().addOnCompleteListener {
+                                deleteGoogleLauncher.launch(googleClient.signInIntent)
+                            }
                         } else {
                             isDeleting = true
                             viewModel.deleteAccount(deletePassword) { ok, msg ->

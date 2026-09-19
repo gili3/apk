@@ -63,10 +63,21 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ إصلاح: كانت تعرض e.message الخام من Firebase للمستخدم (إنجليزي، مثل
+    // "The supplied auth credential is incorrect, malformed or has expired").
     fun changePassword(currentPassword: String, newPassword: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try { repo.changePassword(currentPassword, newPassword); onResult(true, null) }
-            catch (e: Exception) { onResult(false, e.message) }
+            catch (e: Exception) {
+                val message = when (e) {
+                    is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> "كلمة المرور الحالية غير صحيحة"
+                    is com.google.firebase.auth.FirebaseAuthWeakPasswordException -> "كلمة المرور الجديدة ضعيفة جداً"
+                    is com.google.firebase.FirebaseTooManyRequestsException -> "تم تجاوز عدد المحاولات، يرجى المحاولة لاحقاً"
+                    is com.google.firebase.FirebaseNetworkException -> "تعذّر الاتصال بالإنترنت، تحقق من اتصالك وحاول مرة أخرى"
+                    else -> "فشل تغيير كلمة المرور، حاول مرة أخرى"
+                }
+                onResult(false, message)
+            }
         }
     }
 
@@ -157,10 +168,33 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ إصلاح: كانت تبلع الاستثناء وتعرض رسالة واحدة ثابتة مهما كان السبب
+    // (حساب محظور، تعارض مع طريقة دخول أخرى، انقطاع شبكة...) ولا تسجّله بأي
+    // مكان — فيستحيل معرفة سبب فشل "الدخول بجوجل". الآن رسالة مناسبة لكل حالة،
+    // والأخطاء غير المتوقعة تظهر بسجل الأخطاء بلوحة التحكم.
     fun signInWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
-            try { repo.signInWithGoogleIdToken(idToken); repo.syncFcmToken(); onResult(true, null) }
-            catch (e: Exception) { onResult(false, "فشل تسجيل الدخول عبر Google") }
+            try {
+                repo.signInWithGoogleIdToken(idToken)
+                repo.syncFcmToken()
+                onResult(true, null)
+            } catch (e: Exception) {
+                val message = when (e) {
+                    is com.google.firebase.FirebaseNetworkException ->
+                        "تعذّر الاتصال بالإنترنت، تحقق من اتصالك وحاول مرة أخرى"
+                    is com.google.firebase.auth.FirebaseAuthInvalidUserException ->
+                        if (e.errorCode == "ERROR_USER_DISABLED") "الحساب محظور" else "لا يوجد حساب مرتبط بهذا البريد الإلكتروني"
+                    is com.google.firebase.auth.FirebaseAuthUserCollisionException ->
+                        "هذا البريد مسجَّل بطريقة دخول أخرى، سجّل الدخول بها أولاً"
+                    is com.google.firebase.FirebaseTooManyRequestsException ->
+                        "تم تجاوز عدد المحاولات، يرجى المحاولة لاحقاً"
+                    else -> "فشل تسجيل الدخول عبر Google"
+                }
+                if (e !is com.google.firebase.FirebaseNetworkException) {
+                    com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "signInWithGoogle")
+                }
+                onResult(false, message)
+            }
         }
     }
 

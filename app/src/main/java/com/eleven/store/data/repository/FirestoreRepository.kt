@@ -304,25 +304,60 @@ class FirestoreRepository {
             .call(mapOf("email" to normalizeEmailForAuth(email))).await()
     }
 
-    // ✅ تسجيل الدخول/التسجيل عبر Google، مطابق لسلوك الموقع (signInWithPopup + setDoc merge)
+    // ✅ تسجيل الدخول/التسجيل عبر Google.
+    // إصلاحان مهمان مقارنة بالنسخة السابقة:
+    //  1) كانت تكتب كل مرة set(merge) بـphone="" وname وavatar وcreatedAt=الآن،
+    //     فتمسح رقم هاتف المستخدم واسمه المعدَّل وتاريخ إنشاء حسابه عند كل
+    //     دخول بجوجل. الآن: مستند جديد فقط يُنشأ كاملاً، والموجود لا يُلمس
+    //     إلا لملء حقل فارغ فعلاً.
+    //  2) كان أي فشل في كتابة مستند المستخدم (قواعد Firestore، شبكة...) يُسقط
+    //     العملية كلها بعبارة "فشل تسجيل الدخول" رغم أن Firebase Auth أكمل
+    //     الدخول فعلاً. الآن مزامنة الملف الشخصي "أفضل جهد": تُسجَّل بسجل
+    //     الأخطاء بلوحة التحكم ولا تمنع الدخول.
     suspend fun signInWithGoogleIdToken(idToken: String): FirebaseUser {
         val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
         val result = auth.signInWithCredential(credential).await()
         val user = result.user ?: throw IllegalStateException("فشل تسجيل الدخول عبر Google")
 
-        db.collection("users").document(user.uid).set(
-            mapOf(
-                "id" to user.uid,
-                "name" to (user.displayName ?: ""),
-                "email" to (user.email ?: ""),
-                "phone" to "",
-                "avatar" to (user.photoUrl?.toString() ?: ""),
-                "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-            ),
-            com.google.firebase.firestore.SetOptions.merge()
-        ).await()
+        try {
+            syncGoogleProfile(user)
+        } catch (e: Exception) {
+            Log.w("FirestoreRepository", "تعذّرت مزامنة ملف مستخدم Google (الدخول نفسه نجح)", e)
+            com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "googleSignIn:syncProfile")
+        }
 
         return user
+    }
+
+    private suspend fun syncGoogleProfile(user: FirebaseUser) {
+        val ref = db.collection("users").document(user.uid)
+        val existing = ref.get().await()
+        val displayName = user.displayName.orEmpty()
+        val email = user.email.orEmpty()
+        val avatar = user.photoUrl?.toString().orEmpty()
+
+        if (!existing.exists()) {
+            ref.set(
+                mapOf(
+                    "id" to user.uid,
+                    "name" to displayName,
+                    "email" to email,
+                    "phone" to "",
+                    "avatar" to avatar,
+                    "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                )
+            ).await()
+            return
+        }
+
+        val patch = mutableMapOf<String, Any>()
+        if (existing.getString("id").isNullOrBlank()) patch["id"] = user.uid
+        if (existing.getString("name").isNullOrBlank() && displayName.isNotBlank()) patch["name"] = displayName
+        if (existing.getString("email").isNullOrBlank() && email.isNotBlank()) patch["email"] = email
+        if (existing.getString("avatar").isNullOrBlank() && avatar.isNotBlank()) patch["avatar"] = avatar
+        if (patch.isNotEmpty()) {
+            ref.set(patch, com.google.firebase.firestore.SetOptions.merge()).await()
+        }
     }
 
     // ✅ إصلاح: كانت تُرسل رابط إعادة تعيين (sendPasswordResetEmailCustom).

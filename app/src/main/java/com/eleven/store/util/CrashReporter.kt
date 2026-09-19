@@ -46,10 +46,24 @@ object CrashReporter {
                 // ✅ حجب متزامن (وليس coroutine/callback) عمداً: هذا المعالج يُستدعى
                 // على Thread على وشك إنهاء العملية بالكامل — أي كود غير متزامن هنا
                 // لن يكتمل إطلاقاً لأن العملية ستموت قبل تشغيل أي callback لاحق.
-                Tasks.await(
-                    functions.getHttpsCallable("reportClientError").call(data),
-                    3, TimeUnit.SECONDS
-                )
+                //
+                // ✅ إصلاح مهم: Tasks.await() يرمي IllegalStateException فوراً لو استُدعي
+                // على الـmain thread ("Must not be called on the main thread") — وأغلب
+                // كراشات واجهة التطبيق تحدث على الـmain thread تحديداً، فكانت تقارير
+                // الكراش لا تصل للوحة إطلاقاً. الحل: الإرسال والانتظار على Thread
+                // مستقل، والـthread الحالي (حتى لو main) ينتظره بـjoin بحد أقصى 3.5 ثانية.
+                val sender = Thread {
+                    try {
+                        Tasks.await(
+                            functions.getHttpsCallable("reportClientError").call(data),
+                            3, TimeUnit.SECONDS
+                        )
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "فشل إرسال تقرير الكراش", e)
+                    }
+                }
+                sender.start()
+                sender.join(3500)
             } catch (reportingError: Throwable) {
                 // فشل الإبلاغ نفسه لا يجب أن يمنع تسليم الكراش الأصلي للمعالج التالي.
                 Log.e(TAG, "فشل إرسال تقرير الكراش", reportingError)

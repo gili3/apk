@@ -43,7 +43,7 @@ import com.eleven.store.data.model.NotificationItem
 import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
-//  SETTINGS SCREEN — نسخة طبق الأصل من Settings.tsx
+//  SETTINGS SCREEN
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -92,7 +92,7 @@ fun SettingsScreen(
     var deleteOtpStep by remember { mutableStateOf(false) }
     var deleteOtpCode by remember { mutableStateOf("") }
     var isResendingOtp by remember { mutableStateOf(false) }
-    val isGoogleAccount = remember { viewModel.isCurrentUserGoogleAccount() }
+    val isGoogleAccount = remember(user?.uid) { viewModel.isCurrentUserGoogleAccount() }
     val deleteGoogleLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -164,15 +164,6 @@ fun SettingsScreen(
                 scope.launch {
                     snackbarHostState.showMessage(msg ?: "فشل تغيير كلمة المرور", SnackbarType.ERROR)
                 }
-            }
-        }
-    }
-
-    val onResendEmailVerification: () -> Unit = {
-        viewModel.resendEmailVerification { ok, msg ->
-            scope.launch {
-                if (ok) snackbarHostState.showMessage("تم إرسال رابط التأكيد إلى بريدك الإلكتروني", SnackbarType.SUCCESS)
-                else snackbarHostState.showMessage(msg ?: "تعذّر إرسال رابط التأكيد", SnackbarType.ERROR)
             }
         }
     }
@@ -264,6 +255,11 @@ fun SettingsScreen(
         }
     }
 
+    // كلمة المرور تخص حسابات البريد فقط — حساب Google وحده لا يملك كلمة مرور
+    // محلية، فزر "تغيير كلمة المرور" له كان يفشل دائماً (إعادة المصادقة بالبريد
+    // تحتاج كلمة مرور غير موجودة أصلاً).
+    val hasPasswordProvider = user?.providerData?.any { it.providerId == "password" } == true
+
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
         topBar = {
@@ -273,28 +269,17 @@ fun SettingsScreen(
         LazyColumn(
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
-                top = 24.dp + padding.calculateTopPadding(),
+                top = 16.dp + padding.calculateTopPadding(),
                 bottom = 32.dp + padding.calculateBottomPadding(),
             ),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // ── العنوان الرئيسي ─────────────────────────
-            item {
-                Text(
-                    "الإعدادات",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 24.sp,
-                    fontFamily = FontFamily.Serif,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            // ════════════════════════════════════════════
-            //  بطاقة الحساب
-            // ════════════════════════════════════════════
+            // ── الحساب ──────────────────────────────────
             item {
                 AccountSection(
                     user = user,
+                    isGoogleAccount = isGoogleAccount,
+                    canChangePassword = hasPasswordProvider,
                     showChangePassword = showChangePassword,
                     onToggleChangePassword = { showChangePassword = !showChangePassword },
                     currentPassword = currentPassword,
@@ -310,50 +295,38 @@ fun SettingsScreen(
                     isLoading = isLoading,
                     onSavePassword = onSavePassword,
                     onCancelChangePassword = { showChangePassword = false },
-                    onDeleteAccountClick = {
-                        deletePassword = ""
-                        showDeleteAccountDialog = true
-                    },
                     onNavigateToLogin = onNavigateToLogin,
                 )
             }
 
-            // ════════════════════════════════════════════
-            //  ✅ جديد: تنبيه تأكيد البريد الإلكتروني — يظهر فقط لحسابات
-            //  بريد/كلمة مرور (حسابات Google مؤكَّدة أصلاً من طرف Google)
-            //  لم تُؤكَّد بعد. غير مانع لاستخدام التطبيق، فقط تذكير مع زر
-            //  لإعادة إرسال رابط التأكيد.
-            // ════════════════════════════════════════════
-            val isPasswordAccount = user?.providerData?.any { it.providerId == "password" } == true
-            if (user != null && isPasswordAccount && user?.isEmailVerified == false) {
+            // ── القانونية — تظهر فقط لو رابط الموقع مضبوط من الأدمن، بدل أزرار
+            //    ميتة تعرض "الصفحة غير متاحة" عند كل ضغطة.
+            if (baseUrl.isNotBlank()) {
                 item {
-                    EmailVerificationBanner(onResend = onResendEmailVerification)
+                    LegalSection(
+                        onOpenPrivacyPolicy = onOpenPrivacyPolicy,
+                        onOpenTermsOfService = onOpenTermsOfService,
+                    )
                 }
             }
 
-            // ════════════════════════════════════════════
-            //  بطاقة القانونية
-            // ════════════════════════════════════════════
-            item {
-                LegalSection(
-                    onOpenPrivacyPolicy = onOpenPrivacyPolicy,
-                    onOpenTermsOfService = onOpenTermsOfService,
-                )
+            // ── تسجيل الخروج / حذف الحساب — لا معنى لهما بلا حساب مسجَّل دخول ──
+            if (user != null) {
+                item { LogoutButton(onClick = { showLogoutConfirm = true }) }
+                item {
+                    DeleteAccountButton(
+                        onClick = {
+                            deletePassword = ""
+                            showDeleteAccountDialog = true
+                        },
+                    )
+                }
             }
 
-            // ════════════════════════════════════════════
-            //  زر تسجيل الخروج
-            // ════════════════════════════════════════════
-            item {
-                LogoutButton(onClick = { showLogoutConfirm = true })
-            }
-
-            // ════════════════════════════════════════════
-            //  تذييل
-            // ════════════════════════════════════════════
+            // ── تذييل: رقم النسخة الفعلي من البناء (كان مكتوباً يدوياً 1.0.0) ──
             item {
                 Text(
-                    "Eleven Store — النسخة 1.0.0",
+                    "Eleven Store — النسخة ${com.eleven.store.BuildConfig.VERSION_NAME}",
                     color = MutedForeground,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
@@ -402,8 +375,47 @@ fun SettingsScreen(
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
+    ) {
+        Column(content = content)
+    }
+}
+
+/** صف إعداد قابل للضغط: أيقونة + نص + سهم — نفس الشكل بكل الأقسام. */
+@Composable
+private fun SettingsRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, null, tint = MutedForeground, modifier = Modifier.size(20.dp))
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(Icons.Filled.ChevronLeft, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
 private fun AccountSection(
     user: com.google.firebase.auth.FirebaseUser?,
+    isGoogleAccount: Boolean,
+    canChangePassword: Boolean,
     showChangePassword: Boolean,
     onToggleChangePassword: () -> Unit,
     currentPassword: String,
@@ -419,173 +431,119 @@ private fun AccountSection(
     isLoading: Boolean,
     onSavePassword: () -> Unit,
     onCancelChangePassword: () -> Unit,
-    onDeleteAccountClick: () -> Unit,
     onNavigateToLogin: () -> Unit,
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-    ) {
-        Column {
-            // Header
-            Row(
-                modifier = Modifier.padding(
-                    start = 20.dp, end = 20.dp,
-                    top = 20.dp, bottom = 12.dp,
-                ),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+    SettingsCard {
+        if (user == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    Icons.Filled.Lock,
-                    null,
-                    tint = Accent,
-                    modifier = Modifier.size(22.dp),
+                Text(
+                    "سجّل الدخول لإدارة إعدادات حسابك",
+                    color = MutedForeground,
+                    fontSize = 14.sp,
+                )
+                ElevenButton(text = "تسجيل الدخول", onClick = onNavigateToLogin)
+            }
+            return@SettingsCard
+        }
+
+        // البريد + طريقة الدخول
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Filled.Person, null, tint = Accent, modifier = Modifier.size(22.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    user.email.orEmpty(),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "الحساب",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    if (isGoogleAccount) "مسجَّل عبر Google" else "مسجَّل بالبريد وكلمة المرور",
+                    color = MutedForeground,
+                    fontSize = 12.sp,
                 )
             }
+        }
 
+        if (canChangePassword) {
             HorizontalDivider(color = Border)
-
-            Column(modifier = Modifier.padding(12.dp)) {
-                // البريد الإلكتروني الحالي
-                if (user != null) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                MaterialTheme.colorScheme.surfaceVariant
-                                    .copy(alpha = 0.3f),
-                                RoundedCornerShape(8.dp),
-                            )
-                            .padding(12.dp),
-                    ) {
-                        Column {
-                            Text(
-                                "الحساب الحالي",
-                                color = MutedForeground,
-                                fontSize = 12.sp,
-                            )
-                            Text(
-                                user.email ?: "",
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                // ✅ إصلاح: كانت أزرار "تغيير كلمة المرور" و"حذف
-                // الحساب" تظهر دائماً حتى بلا تسجيل دخول، فتفشل
-                // بصمت أو برسالة عامة عند الضغط عليها بدل توضيح
-                // أن المستخدم يحتاج تسجيل الدخول أولاً.
-                if (user != null) {
-                    // زر تغيير كلمة المرور
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onToggleChangePassword() }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.Lock,
-                            null,
-                            tint = MutedForeground,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            "تغيير كلمة المرور",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Icon(
-                            Icons.Filled.ChevronLeft,
-                            null,
-                            tint = MutedForeground,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-
-                    if (showChangePassword) {
-                        ChangePasswordForm(
-                            currentPassword = currentPassword,
-                            onCurrentPasswordChange = onCurrentPasswordChange,
-                            newPassword = newPassword,
-                            onNewPasswordChange = onNewPasswordChange,
-                            confirmPassword = confirmPassword,
-                            onConfirmPasswordChange = onConfirmPasswordChange,
-                            showCurrentPw = showCurrentPw,
-                            onToggleShowCurrentPw = onToggleShowCurrentPw,
-                            showNewPw = showNewPw,
-                            onToggleShowNewPw = onToggleShowNewPw,
-                            isLoading = isLoading,
-                            onSave = onSavePassword,
-                            onCancel = onCancelChangePassword,
-                        )
-                    }
-
-                    HorizontalDivider(color = Border)
-
-                    // زر حذف الحساب
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onDeleteAccountClick() }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.DeleteForever,
-                            null,
-                            tint = Destructive,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            "حذف الحساب",
-                            fontSize = 14.sp,
-                            color = Destructive,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Icon(
-                            Icons.Filled.ChevronLeft,
-                            null,
-                            tint = MutedForeground,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            "سجّل الدخول لإدارة إعدادات حسابك",
-                            color = MutedForeground,
-                            fontSize = 14.sp,
-                        )
-                        ElevenButton(text = "تسجيل الدخول", onClick = onNavigateToLogin)
-                    }
-                }
+            SettingsRow(
+                icon = Icons.Filled.Lock,
+                label = "تغيير كلمة المرور",
+                onClick = onToggleChangePassword,
+            )
+            if (showChangePassword) {
+                ChangePasswordForm(
+                    currentPassword = currentPassword,
+                    onCurrentPasswordChange = onCurrentPasswordChange,
+                    newPassword = newPassword,
+                    onNewPasswordChange = onNewPasswordChange,
+                    confirmPassword = confirmPassword,
+                    onConfirmPasswordChange = onConfirmPasswordChange,
+                    showCurrentPw = showCurrentPw,
+                    onToggleShowCurrentPw = onToggleShowCurrentPw,
+                    showNewPw = showNewPw,
+                    onToggleShowNewPw = onToggleShowNewPw,
+                    isLoading = isLoading,
+                    onSave = onSavePassword,
+                    onCancel = onCancelChangePassword,
+                )
             }
         }
     }
+}
+
+/** حقل كلمة مرور موحّد (كان منسوخاً حرفياً 3 مرات بالنموذج). */
+@Composable
+private fun PasswordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    visible: Boolean,
+    onToggleVisible: () -> Unit,
+    imeAction: androidx.compose.ui.text.input.ImeAction,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder, fontSize = 14.sp) },
+        leadingIcon = {
+            Icon(Icons.Filled.Lock, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
+        },
+        trailingIcon = {
+            IconButton(onClick = onToggleVisible) {
+                Icon(
+                    if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    null,
+                    tint = MutedForeground,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        },
+        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = imeAction),
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        shape = RoundedCornerShape(8.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Accent,
+            unfocusedBorderColor = Border,
+            unfocusedContainerColor = MaterialTheme.colorScheme.background,
+        ),
+    )
 }
 
 @Composable
@@ -607,144 +565,48 @@ private fun ChangePasswordForm(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                MaterialTheme.colorScheme.surfaceVariant
-                    .copy(alpha = 0.2f),
-                RoundedCornerShape(8.dp),
-            )
-            .padding(12.dp),
+            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // كلمة المرور الحالية
-        OutlinedTextField(
+        PasswordField(
             value = currentPassword,
             onValueChange = onCurrentPasswordChange,
-            placeholder = {
-                Text(
-                    "كلمة المرور الحالية",
-                    fontSize = 14.sp,
-                )
-            },
-            leadingIcon = {
-                Icon(
-                    Icons.Filled.Lock,
-                    null,
-                    tint = MutedForeground,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-            trailingIcon = {
-                IconButton(
-                    onClick = onToggleShowCurrentPw,
-                ) {
-                    Icon(
-                        if (showCurrentPw) Icons.Filled.VisibilityOff
-                        else Icons.Filled.Visibility,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            },
-            visualTransformation = if (showCurrentPw)
-                VisualTransformation.None
-            else PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                unfocusedBorderColor = Border,
-                unfocusedContainerColor = MaterialTheme
-                    .colorScheme
-                    .background,
-            ),
+            placeholder = "كلمة المرور الحالية",
+            visible = showCurrentPw,
+            onToggleVisible = onToggleShowCurrentPw,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )
-
-        // كلمة المرور الجديدة
-        OutlinedTextField(
+        PasswordField(
             value = newPassword,
             onValueChange = onNewPasswordChange,
-            placeholder = {
-                Text(
-                    "كلمة المرور الجديدة",
-                    fontSize = 14.sp,
-                )
-            },
-            leadingIcon = {
-                Icon(
-                    Icons.Filled.Lock,
-                    null,
-                    tint = MutedForeground,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-            trailingIcon = {
-                IconButton(
-                    onClick = onToggleShowNewPw,
-                ) {
-                    Icon(
-                        if (showNewPw) Icons.Filled.VisibilityOff
-                        else Icons.Filled.Visibility,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            },
-            visualTransformation = if (showNewPw)
-                VisualTransformation.None
-            else PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                unfocusedBorderColor = Border,
-                unfocusedContainerColor = MaterialTheme
-                    .colorScheme
-                    .background,
-            ),
+            placeholder = "كلمة المرور الجديدة (8 أحرف على الأقل)",
+            visible = showNewPw,
+            onToggleVisible = onToggleShowNewPw,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Next,
         )
-
-        // تأكيد كلمة المرور الجديدة
-        OutlinedTextField(
+        // زر الإظهار واحد للحقلين الجديدين — التأكيد يتبع نفس حالة الإظهار.
+        PasswordField(
             value = confirmPassword,
             onValueChange = onConfirmPasswordChange,
-            placeholder = {
-                Text(
-                    "تأكيد كلمة المرور الجديدة",
-                    fontSize = 14.sp,
-                )
-            },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Accent,
-                unfocusedBorderColor = Border,
-                unfocusedContainerColor = MaterialTheme
-                    .colorScheme
-                    .background,
-            ),
+            placeholder = "تأكيد كلمة المرور الجديدة",
+            visible = showNewPw,
+            onToggleVisible = onToggleShowNewPw,
+            imeAction = androidx.compose.ui.text.input.ImeAction.Done,
         )
 
-        // أزرار
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(
                 onClick = onSave,
-                enabled = !isLoading,
+                enabled = !isLoading &&
+                    currentPassword.isNotEmpty() && newPassword.isNotEmpty() && confirmPassword.isNotEmpty(),
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp),
+                    .height(40.dp),
                 shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Accent,
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
             ) {
                 Text(
                     if (isLoading) "جاري الحفظ..." else "حفظ",
@@ -755,59 +617,14 @@ private fun ChangePasswordForm(
             }
             OutlinedButton(
                 onClick = onCancel,
+                enabled = !isLoading,
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp),
+                    .height(40.dp),
                 shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    Border,
-                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Border),
             ) {
-                Text(
-                    "إلغاء",
-                    fontSize = 14.sp,
-                    color = MutedForeground,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmailVerificationBanner(onResend: () -> Unit) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Filled.Email, null, tint = Accent, modifier = Modifier.size(20.dp))
-                Text(
-                    "بريدك الإلكتروني غير مؤكَّد",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-            Text(
-                "تحقق من صندوق بريدك واضغط رابط التأكيد الذي أرسلناه لك.",
-                fontSize = 13.sp,
-                color = MutedForeground,
-            )
-            TextButton(
-                onClick = onResend,
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Text("إعادة إرسال رابط التأكيد", color = Accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("إلغاء", fontSize = 14.sp, color = MutedForeground)
             }
         }
     }
@@ -818,104 +635,18 @@ private fun LegalSection(
     onOpenPrivacyPolicy: () -> Unit,
     onOpenTermsOfService: () -> Unit,
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-    ) {
-        Column {
-            // Header
-            Row(
-                modifier = Modifier.padding(
-                    start = 20.dp, end = 20.dp,
-                    top = 20.dp, bottom = 12.dp,
-                ),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    Icons.Filled.PrivacyTip,
-                    null,
-                    tint = Accent,
-                    modifier = Modifier.size(22.dp),
-                )
-                Text(
-                    "القانونية",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            HorizontalDivider(color = Border)
-
-            Column(modifier = Modifier.padding(4.dp)) {
-                // سياسة الخصوصية
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenPrivacyPolicy() }
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.PrivacyTip,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        "سياسة الخصوصية",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Icons.Filled.ChevronLeft,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-
-                HorizontalDivider(
-                    color = Border,
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-
-                // الشروط والأحكام
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenTermsOfService() }
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Description,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        "الشروط والأحكام",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Icons.Filled.ChevronLeft,
-                        null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-        }
+    SettingsCard {
+        SettingsRow(
+            icon = Icons.Filled.PrivacyTip,
+            label = "سياسة الخصوصية",
+            onClick = onOpenPrivacyPolicy,
+        )
+        HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+        SettingsRow(
+            icon = Icons.Filled.Description,
+            label = "الشروط والأحكام",
+            onClick = onOpenTermsOfService,
+        )
     }
 }
 
@@ -946,6 +677,20 @@ private fun LogoutButton(onClick: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             fontSize = 16.sp,
         )
+    }
+}
+
+/** حذف الحساب: إجراء نادر ومدمِّر — زر نصي هادئ منفصل بدل صف بين إعدادات عادية. */
+@Composable
+private fun DeleteAccountButton(onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.textButtonColors(contentColor = Destructive),
+    ) {
+        Icon(Icons.Filled.DeleteForever, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("حذف الحساب", fontSize = 14.sp)
     }
 }
 

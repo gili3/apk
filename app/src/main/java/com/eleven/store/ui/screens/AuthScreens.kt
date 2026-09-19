@@ -97,6 +97,75 @@ internal fun buildGoogleSignInClient(context: android.content.Context) =
             .build()
     )
 
+/**
+ * معالجة نتيجة شاشة اختيار حساب Google — مشتركة بين شاشتي الدخول والتسجيل
+ * (كانت منسوخة حرفياً بالمكانين، وكلاهما يبلع كود الخطأ الفعلي بـcatch عام
+ * فيستحيل معرفة سبب الفشل). الآن:
+ *  - إغلاق شاشة اختيار الحساب ليس خطأً ولا تظهر له رسالة.
+ *  - كل كود فشل حقيقي (DEVELOPER_ERROR مثلاً = SHA-1 غير مسجَّل بـFirebase)
+ *    يُسجَّل بسجل الأخطاء بلوحة التحكم مع الكود، ويظهر للمستخدم سبب مفهوم.
+ */
+internal fun handleGoogleSignInResult(
+    result: androidx.activity.result.ActivityResult,
+    viewModel: MainViewModel,
+    fallbackMessage: String,
+    onLoading: (Boolean) -> Unit,
+    onError: (String) -> Unit,
+    onSuccess: () -> Unit,
+) {
+    // المستخدم رجع من شاشة الاختيار بلا اختيار حساب.
+    if (result.resultCode == android.app.Activity.RESULT_CANCELED && result.data == null) return
+
+    val account = try {
+        com.google.android.gms.auth.api.signin.GoogleSignIn
+            .getSignedInAccountFromIntent(result.data)
+            .getResult(com.google.android.gms.common.api.ApiException::class.java)
+    } catch (e: com.google.android.gms.common.api.ApiException) {
+        val code = e.statusCode
+        val codeName = com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes.getStatusCodeString(code)
+        when (code) {
+            com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> Unit
+            com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR ->
+                onError("تعذّر الاتصال بالإنترنت، تحقق من اتصالك وحاول مرة أخرى")
+            com.google.android.gms.common.api.CommonStatusCodes.DEVELOPER_ERROR -> {
+                onError("تسجيل الدخول عبر Google غير مُهيَّأ في هذه النسخة من التطبيق")
+                com.eleven.store.util.CrashReporter.reportNonFatal(
+                    RuntimeException("Google Sign-In DEVELOPER_ERROR ($code $codeName) — تحقق من بصمة SHA-1 و google-services.json", e),
+                    route = "googleSignIn",
+                )
+            }
+            else -> {
+                onError(fallbackMessage)
+                com.eleven.store.util.CrashReporter.reportNonFatal(
+                    RuntimeException("Google Sign-In failed: $codeName ($code)", e),
+                    route = "googleSignIn",
+                )
+            }
+        }
+        return
+    } catch (e: Exception) {
+        onError(fallbackMessage)
+        com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "googleSignIn")
+        return
+    }
+
+    val idToken = account?.idToken
+    if (idToken == null) {
+        onError(fallbackMessage)
+        com.eleven.store.util.CrashReporter.reportNonFatal(
+            RuntimeException("Google Sign-In رجع بلا idToken — تحقق من GOOGLE_WEB_CLIENT_ID"),
+            route = "googleSignIn",
+        )
+        return
+    }
+
+    onLoading(true)
+    viewModel.signInWithGoogle(idToken) { ok, msg ->
+        onLoading(false)
+        if (ok) onSuccess() else onError(msg ?: fallbackMessage)
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  AUTH VALIDATION — تحقق حقيقي من صيغة المدخلات (بدل isBlank فقط)
 // ═══════════════════════════════════════════════════════════════
@@ -477,21 +546,14 @@ fun LoginScreen(
     val googleLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val task = com.google.android.gms.auth.api.signin.GoogleSignIn
-            .getSignedInAccountFromIntent(result.data)
-        try {
-            val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
-            account?.idToken?.let { idToken ->
-                isLoading = true
-                viewModel.signInWithGoogle(idToken) { ok, msg ->
-                    isLoading = false
-                    if (ok) onLoginSuccess()
-                    else error = msg ?: "فشل تسجيل الدخول عبر Google"
-                }
-            } ?: run { error = "فشل تسجيل الدخول عبر Google" }
-        } catch (_: Exception) {
-            error = "فشل تسجيل الدخول عبر Google"
-        }
+        handleGoogleSignInResult(
+            result = result,
+            viewModel = viewModel,
+            fallbackMessage = "فشل تسجيل الدخول عبر Google",
+            onLoading = { isLoading = it },
+            onError = { error = it },
+            onSuccess = onLoginSuccess,
+        )
     }
 
     // ── حالة نسيت كلمة المرور ──
@@ -706,6 +768,7 @@ fun LoginScreen(
                             // يمسح ذاكرة GoogleSignInClient نفسه). نستدعي signOut() على
                             // عميل جوجل تحديداً قبل كل محاولة دخول لإجباره على نسيان الحساب
                             // المخزَّن وعرض كل الحسابات المتاحة على الجهاز من جديد.
+                            error = ""
                             googleClient.signOut().addOnCompleteListener {
                                 googleLauncher.launch(googleClient.signInIntent)
                             }
@@ -1291,21 +1354,14 @@ fun RegisterScreen(
     val googleLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val task = com.google.android.gms.auth.api.signin.GoogleSignIn
-            .getSignedInAccountFromIntent(result.data)
-        try {
-            val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
-            account?.idToken?.let { idToken ->
-                isLoading = true
-                viewModel.signInWithGoogle(idToken) { ok, msg ->
-                    isLoading = false
-                    if (ok) onRegisterSuccess()
-                    else error = msg ?: "فشل التسجيل عبر Google"
-                }
-            } ?: run { error = "فشل التسجيل عبر Google" }
-        } catch (_: Exception) {
-            error = "فشل التسجيل عبر Google"
-        }
+        handleGoogleSignInResult(
+            result = result,
+            viewModel = viewModel,
+            fallbackMessage = "فشل التسجيل عبر Google",
+            onLoading = { isLoading = it },
+            onError = { error = it },
+            onSuccess = onRegisterSuccess,
+        )
     }
 
     // ── حالة: تم إنشاء الحساب وأُرسل رمز التأكيد ──
@@ -1699,6 +1755,7 @@ fun RegisterScreen(
                         onClick = {
                             // ✅ إصلاح: نفس مشكلة شاشة تسجيل الدخول — إجبار عميل جوجل على
                             // نسيان الحساب المخزَّن قبل فتح قائمة اختيار الحساب.
+                            error = ""
                             googleClient.signOut().addOnCompleteListener {
                                 googleLauncher.launch(googleClient.signInIntent)
                             }

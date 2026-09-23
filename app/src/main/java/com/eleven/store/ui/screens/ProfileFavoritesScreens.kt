@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,13 +49,17 @@ import kotlinx.coroutines.launch
 // ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
 
 // ═══════════════════════════════════════════════════════════════
-//  PROFILE SCREEN — نسخة طبق الأصل من Profile.tsx
+//  PROFILE SCREEN — تصميم «البسيط»: بلا بطاقات، خطوط فاصلة رفيعة
+//  وعناوين Serif. الاسم بارز بالأعلى، ثم أقسام: البيانات، العناوين،
+//  حسابي (طلباتي/المفضلة/الإشعارات).
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun ProfileScreen(
     viewModel: MainViewModel,
     onNavigateToOrders: () -> Unit,
+    onNavigateToFavorites: () -> Unit,
+    onNavigateToNotifications: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToLogin: () -> Unit,
 ) {
@@ -62,10 +67,14 @@ fun ProfileScreen(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val addresses by viewModel.addresses.collectAsStateWithLifecycle()
     val addressesError by viewModel.addressesError.collectAsStateWithLifecycle()
+    val orders by viewModel.orders.collectAsStateWithLifecycle()
+    val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
+    val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
 
-    var selectedTab by remember { mutableStateOf<ProfileTab>(ProfileTab.INFO) }
     var showForm by remember { mutableStateOf(false) }
     var editingAddress by remember { mutableStateOf<Address?>(null) }
+    // ✅ جديد: حذف العنوان كان فورياً بلا تأكيد — الآن نافذة تأكيد قبل الحذف.
+    var addressToDelete by remember { mutableStateOf<Address?>(null) }
 
     // ── تعديل الاسم ورقم الهاتف ──
     var isEditingInfo by remember { mutableStateOf(false) }
@@ -75,7 +84,12 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(user) { if (user != null) viewModel.loadAddresses() }
+    LaunchedEffect(user) {
+        if (user != null) {
+            viewModel.loadAddresses()
+            viewModel.loadOrders()
+        }
+    }
     // ✅ إصلاح: نفس إصلاح CheckoutScreen — يعرض رسالة واضحة بدل قائمة عناوين
     // فارغة صامتة عند فشل التحميل فعلياً (غير متاح بلا إنترنت مثلاً)
     LaunchedEffect(addressesError) {
@@ -113,6 +127,17 @@ fun ProfileScreen(
         return
     }
 
+    val account = user!!
+    val rawName = userProfile?.name?.takeIf { it.isNotBlank() }
+        ?: account.displayName?.takeIf { it.isNotBlank() }
+    val displayName = rawName ?: "مستخدم"
+    val email = account.email.orEmpty()
+    val phone = userProfile?.phone?.takeIf { it.isNotBlank() }
+
+    val onSurface = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val line = MaterialTheme.colorScheme.outline
+
     Scaffold(
         snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
         topBar = {
@@ -128,503 +153,429 @@ fun ProfileScreen(
     ) { padding ->
         LazyColumn(
             contentPadding = PaddingValues(
-                start = 16.dp, end = 16.dp,
-                top = padding.calculateTopPadding(),
+                start = 20.dp, end = 20.dp,
+                top = padding.calculateTopPadding() + 8.dp,
                 bottom = 24.dp + padding.calculateBottomPadding(),
             ),
-            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            // ════════════════════════════════════════════════
-            //  HEADER GRADIENT — مطابق للموقع:
-            //  linear-gradient(180deg, ink → neutral[800])
-            //  rounded-b-3xl
-            // ════════════════════════════════════════════════
+            // ── الاسم والبريد ──
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color(0xFF1A1A2E), // ink
-                                    Color(0xFF2D2D44), // neutral[800]
-                                ),
-                            ),
-                            RoundedCornerShape(
-                                bottomStart = 24.dp,
-                                bottomEnd = 24.dp,
-                            ),
-                        )
-                        .padding(top = 32.dp, bottom = 40.dp),
-                    contentAlignment = Alignment.Center,
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        displayName,
+                        fontFamily = ElevenSerifFontFamily,
+                        fontSize = 28.sp,
+                        lineHeight = 36.sp,
+                        color = onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (email.isNotBlank()) {
+                        Text(email, color = muted, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            // ── البيانات ──
+            item {
+                ProfileSectionHeader(
+                    title = "البيانات",
+                    actionLabel = if (!isEditingInfo) "تعديل" else null,
                 ) {
+                    editName = rawName ?: ""
+                    editPhone = userProfile?.phone ?: ""
+                    isEditingInfo = true
+                }
+            }
+            if (!isEditingInfo) {
+                item { ProfileValueRow("الهاتف", phone ?: "—") }
+                item { ProfileValueRow("البريد الإلكتروني", email.ifBlank { "—" }) }
+            } else {
+                item {
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
                     ) {
-                        // Avatar circle
-                        Box(
-                            modifier = Modifier
-                                .size(96.dp)
-                                .background(
-                                    Color.White.copy(alpha = 0.1f),
-                                    CircleShape,
-                                )
-                                .border(2.dp, Accent, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = (userProfile?.name?.ifBlank { null } ?: user!!.displayName)?.firstOrNull()
-                                    ?.uppercaseChar()
-                                    ?.toString()
-                                    ?: user!!.email?.firstOrNull()
-                                        ?.uppercaseChar()
-                                        ?.toString()
-                                    ?: "11",
-                                fontSize = 36.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Serif,
-                                color = Accent,
-                            )
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            (userProfile?.name?.ifBlank { null } ?: user!!.displayName) ?: "مستخدم",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = Color.White,
+                        OutlinedTextField(
+                            value = editName,
+                            onValueChange = { editName = it },
+                            label = { Text("الاسم الكامل") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = onSurface,
+                                unfocusedBorderColor = line,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = editPhone,
+                            // ✅ يقبل الأرقام فقط (مع علامة + اختيارية بالبداية لمفتاح
+                            // الدولة)، ويمنع أي حرف أو رمز آخر عبر الفلترة هنا (لوحة
+                            // المفاتيح الرقمية وحدها لا تمنع اللصق بأحرف).
+                            onValueChange = { v ->
+                                editPhone = v.filterIndexed { i, c -> c.isDigit() || (c == '+' && i == 0) }
+                            },
+                            label = { Text("رقم الهاتف") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = onSurface,
+                                unfocusedBorderColor = line,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            user!!.email ?: "",
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 14.sp,
+                            "البريد الإلكتروني: ${email.ifBlank { "—" }}",
+                            fontSize = 12.sp,
+                            color = muted,
                         )
-                    }
-                }
-            }
-
-            // ════════════════════════════════════════════════
-            //  TAB BAR — مطابق للموقع:
-            //  flex gap-1 bg-white rounded-xl p-1
-            // ════════════════════════════════════════════════
-            item {
-                Spacer(Modifier.height(20.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            MaterialTheme.colorScheme.surface,
-                            RoundedCornerShape(12.dp),
-                        )
-                        .border(1.dp, Border, RoundedCornerShape(12.dp))
-                        .padding(4.dp),
-                ) {
-                    ProfileTab.entries.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .background(
-                                    if (isSelected) Accent else Color.Transparent,
-                                    RoundedCornerShape(10.dp),
-                                )
-                                .clickable { selectedTab = tab }
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(
-                                tab.label,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = if (isSelected) Color.White else MutedForeground,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(20.dp))
-            }
-
-            // ════════════════════════════════════════════════
-            //  TAB: المعلومات الشخصية — قابلة للتعديل (الاسم والهاتف)
-            // ════════════════════════════════════════════════
-            if (selectedTab == ProfileTab.INFO) {
-                item {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            Border,
-                        ),
-                    ) {
-                        Column(modifier = Modifier.padding(20.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "البيانات الشخصية",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                if (!isEditingInfo) {
-                                    TextButton(onClick = {
-                                        editName = userProfile?.name?.ifBlank { null }
-                                            ?: user!!.displayName ?: ""
-                                        editPhone = userProfile?.phone ?: ""
-                                        isEditingInfo = true
-                                    }) {
-                                        Icon(Icons.Filled.Edit, null, modifier = Modifier.size(16.dp), tint = Accent)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("تعديل", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-
-                            if (!isEditingInfo) {
-                                ProfileInfoRow(
-                                    icon = Icons.Filled.Person,
-                                    label = "الاسم الكامل",
-                                    value = (userProfile?.name?.ifBlank { null } ?: user!!.displayName) ?: "—",
-                                )
-                                HorizontalDivider(color = Border)
-                                ProfileInfoRow(
-                                    icon = Icons.Filled.Email,
-                                    label = "البريد الإلكتروني",
-                                    value = user!!.email ?: "—",
-                                )
-                                HorizontalDivider(color = Border)
-                                ProfileInfoRow(
-                                    icon = Icons.Filled.Phone,
-                                    label = "رقم الهاتف",
-                                    value = userProfile?.phone?.ifBlank { null } ?: "—",
-                                )
-                            } else {
-                                OutlinedTextField(
-                                    value = editName,
-                                    onValueChange = { editName = it },
-                                    label = { Text("الاسم الكامل") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = editPhone,
-                                    // ✅ إصلاح: يقبل الأرقام فقط (مع علامة + اختيارية بالبداية
-                                    // لمفتاح الدولة)، ويمنع أي حرف أو رمز آخر عبر الفلترة هنا
-                                    // (لوحة المفاتيح الرقمية وحدها لا تمنع اللصق بأحرف).
-                                    onValueChange = { v ->
-                                        editPhone = v.filterIndexed { i, c -> c.isDigit() || (c == '+' && i == 0) }
-                                    },
-                                    label = { Text("رقم الهاتف") },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "البريد الإلكتروني: ${user!!.email ?: "—"}",
-                                    fontSize = 12.sp,
-                                    color = MutedForeground,
-                                )
-                                Spacer(Modifier.height(16.dp))
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            if (editName.isBlank()) {
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showMessage("الاسم مطلوب", SnackbarType.ERROR)
-                                                }
-                                                return@Button
-                                            }
-                                            savingInfo = true
-                                            viewModel.updateProfile(editName.trim(), editPhone.trim()) { success, error ->
-                                                savingInfo = false
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showMessage(
-                                                        if (success) "تم حفظ التعديلات بنجاح" else (error ?: "تعذر حفظ التعديلات"),
-                                                        if (success) SnackbarType.SUCCESS else SnackbarType.ERROR
-                                                    )
-                                                }
-                                                if (success) isEditingInfo = false
-                                            }
-                                        },
-                                        enabled = !savingInfo,
-                                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.weight(1f).height(44.dp),
-                                    ) {
-                                        if (savingInfo) {
-                                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                        } else {
-                                            Text("حفظ", fontWeight = FontWeight.Bold)
+                            Button(
+                                onClick = {
+                                    if (editName.isBlank()) {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showMessage("الاسم مطلوب", SnackbarType.ERROR)
                                         }
+                                        return@Button
                                     }
-                                    OutlinedButton(
-                                        onClick = { isEditingInfo = false },
-                                        enabled = !savingInfo,
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.weight(1f).height(44.dp),
-                                    ) {
-                                        Text("إلغاء")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ════════════════════════════════════════════════
-            //  TAB: العناوين
-            // ════════════════════════════════════════════════
-            if (selectedTab == ProfileTab.ADDRESSES) {
-                // قائمة العناوين
-                if (addresses.isNotEmpty()) {
-                    items(addresses, key = { it.id }) { addr ->
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                Border,
-                            ),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                // أيقونة الموقع
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceVariant
-                                                .copy(alpha = 0.3f),
-                                            RoundedCornerShape(12.dp),
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.LocationOn,
-                                        null,
-                                        tint = Accent,
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                }
-                                // معلومات العنوان
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Text(
-                                            addr.fullName,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onBackground,
-                                        )
-                                        if (addr.isDefault) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(
-                                                        Accent.copy(alpha = 0.1f),
-                                                        RoundedCornerShape(4.dp),
-                                                    )
-                                                    .padding(
-                                                        horizontal = 6.dp,
-                                                        vertical = 1.dp,
-                                                    ),
-                                            ) {
-                                                Text(
-                                                    "افتراضي",
-                                                    color = Accent,
-                                                    fontSize = 10.sp,
-                                                )
-                                            }
+                                    savingInfo = true
+                                    viewModel.updateProfile(editName.trim(), editPhone.trim()) { success, error ->
+                                        savingInfo = false
+                                        coroutineScope.launch {
+                                            snackbarHostState.showMessage(
+                                                if (success) "تم حفظ التعديلات بنجاح" else (error ?: "تعذر حفظ التعديلات"),
+                                                if (success) SnackbarType.SUCCESS else SnackbarType.ERROR
+                                            )
                                         }
+                                        if (success) isEditingInfo = false
                                     }
-                                    Text(
-                                        "${addr.city}، ${addr.address}",
-                                        color = MutedForeground,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        addr.phone,
-                                        color = MutedForeground,
-                                        fontSize = 12.sp,
-                                    )
-                                }
-                                // زر تعديل
-                                IconButton(
-                                    onClick = {
-                                        editingAddress = addr
-                                        showForm = true
-                                    },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Edit,
-                                        null,
-                                        tint = MutedForeground,
+                                },
+                                enabled = !savingInfo,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.onBackground,
+                                    contentColor = MaterialTheme.colorScheme.background,
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).height(48.dp),
+                            ) {
+                                if (savingInfo) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.background,
                                         modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
                                     )
-                                }
-                                // زر حذف
-                                IconButton(
-                                    onClick = {
-                                        viewModel.deleteAddress(addr.id)
-                                    },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.DeleteOutline,
-                                        null,
-                                        tint = Destructive.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else if (!showForm) {
-                    item {
-                        Text(
-                            "لا توجد عناوين مسجّلة",
-                            color = MutedForeground,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                        )
-                    }
-                }
-
-                // نموذج إضافة / تعديل عنوان
-                if (showForm) {
-                    item {
-                        AddressFormCard(
-                            initial = editingAddress,
-                            // ✅ توحيد البيانات: عنوان جديد يبدأ ببيانات الملف الشخصي
-                            defaultFullName = (userProfile?.name?.ifBlank { null } ?: user?.displayName) ?: "",
-                            defaultPhone = userProfile?.phone ?: "",
-                            onSave = { fullName, phone, city, address, isDefault ->
-                                val newAddress = Address(
-                                    fullName = fullName,
-                                    phone = phone,
-                                    city = city,
-                                    address = address,
-                                    isDefault = isDefault,
-                                )
-                                if (editingAddress != null) {
-                                    viewModel.updateAddress(
-                                        editingAddress!!.id,
-                                        newAddress,
-                                    ) {
-                                        showForm = false
-                                        editingAddress = null
-                                    }
                                 } else {
-                                    viewModel.addAddress(newAddress) {
-                                        showForm = false
-                                        editingAddress = null
-                                    }
+                                    Text("حفظ", fontWeight = FontWeight.SemiBold)
                                 }
-                            },
-                            onCancel = {
-                                showForm = false
-                                editingAddress = null
-                            },
-                        )
-                    }
-                } else {
-                    // زر إضافة عنوان جديد
-                    item {
-                        Button(
-                            onClick = {
-                                editingAddress = null
-                                showForm = true
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.onBackground,
-                                contentColor = MaterialTheme.colorScheme.background,
-                            ),
-                        ) {
-                            Icon(
-                                Icons.Filled.Add,
-                                null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "إضافة عنوان جديد",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                            )
+                            }
+                            OutlinedButton(
+                                onClick = { isEditingInfo = false },
+                                enabled = !savingInfo,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).height(48.dp),
+                            ) {
+                                Text("إلغاء")
+                            }
                         }
                     }
                 }
+            }
+
+            // ── العناوين ──
+            item {
+                ProfileSectionHeader(
+                    title = "العناوين",
+                    actionLabel = if (!showForm) "إضافة" else null,
+                ) {
+                    editingAddress = null
+                    showForm = true
+                }
+            }
+            if (addresses.isNotEmpty()) {
+                items(addresses, key = { it.id }) { addr ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        addr.fullName,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 14.sp,
+                                        color = onSurface,
+                                    )
+                                    if (addr.isDefault) {
+                                        Box(
+                                            modifier = Modifier
+                                                .border(1.dp, line, RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 6.dp, vertical = 1.dp),
+                                        ) {
+                                            Text("افتراضي", fontSize = 11.sp, color = muted)
+                                        }
+                                    }
+                                }
+                                Text(
+                                    "${addr.city}، ${addr.address}",
+                                    color = muted,
+                                    fontSize = 12.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(addr.phone, color = muted, fontSize = 12.sp)
+                            }
+                            // ✅ أزرار بالحجم الافتراضي (48dp) بدل 32dp — أسهل للّمس
+                            IconButton(
+                                onClick = {
+                                    editingAddress = addr
+                                    showForm = true
+                                },
+                            ) {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    contentDescription = "تعديل العنوان",
+                                    tint = muted,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            IconButton(onClick = { addressToDelete = addr }) {
+                                Icon(
+                                    Icons.Filled.DeleteOutline,
+                                    contentDescription = "حذف العنوان",
+                                    tint = Destructive.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = line)
+                    }
+                }
+            } else if (!showForm) {
+                item {
+                    Text(
+                        "لا توجد عناوين مسجّلة",
+                        color = muted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                }
+            }
+            if (showForm) {
+                item {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    AddressFormCard(
+                        initial = editingAddress,
+                        // ✅ توحيد البيانات: عنوان جديد يبدأ ببيانات الملف الشخصي
+                        defaultFullName = rawName ?: "",
+                        defaultPhone = userProfile?.phone ?: "",
+                        onSave = { fullName, phoneNumber, city, address, isDefault ->
+                            val newAddress = Address(
+                                fullName = fullName,
+                                phone = phoneNumber,
+                                city = city,
+                                address = address,
+                                isDefault = isDefault,
+                            )
+                            if (editingAddress != null) {
+                                viewModel.updateAddress(
+                                    editingAddress!!.id,
+                                    newAddress,
+                                ) {
+                                    showForm = false
+                                    editingAddress = null
+                                }
+                            } else {
+                                viewModel.addAddress(newAddress) {
+                                    showForm = false
+                                    editingAddress = null
+                                }
+                            }
+                        },
+                        onCancel = {
+                            showForm = false
+                            editingAddress = null
+                        },
+                    )
+                    }
+                }
+            }
+
+            // ── حسابي ──
+            item { ProfileSectionHeader(title = "حسابي") }
+            item {
+                ProfileLinkRow(
+                    label = "طلباتي",
+                    trailing = orders.size.takeIf { it > 0 }?.toString(),
+                    onClick = onNavigateToOrders,
+                )
+            }
+            item {
+                ProfileLinkRow(
+                    label = "المفضلة",
+                    trailing = favoriteIds.size.takeIf { it > 0 }?.toString(),
+                    onClick = onNavigateToFavorites,
+                )
+            }
+            item {
+                ProfileLinkRow(
+                    label = "الإشعارات",
+                    trailing = unreadCount.takeIf { it > 0 }?.toString(),
+                    onClick = onNavigateToNotifications,
+                )
             }
         }
+    }
+
+    // ✅ نافذة تأكيد حذف العنوان
+    addressToDelete?.let { addr ->
+        AlertDialog(
+            onDismissRequest = { addressToDelete = null },
+            title = { Text("حذف العنوان", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "هل تريد حذف هذا العنوان؟",
+                    fontSize = 14.sp,
+                    color = MutedForeground,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (editingAddress?.id == addr.id) {
+                            showForm = false
+                            editingAddress = null
+                        }
+                        viewModel.deleteAddress(addr.id)
+                        addressToDelete = null
+                    },
+                ) {
+                    Text("حذف", color = Destructive, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { addressToDelete = null }) { Text("إلغاء") }
+            },
+        )
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  PROFILE TAB ENUM
+//  عناصر شاشة الملف الشخصي
 // ═══════════════════════════════════════════════════════════════
 
-private enum class ProfileTab(val label: String) {
-    INFO("البيانات الشخصية"),
-    ADDRESSES("العناوين"),
+/** عنوان قسم بخط Serif + رابط إجراء اختياري (نص بخط سفلي) بمنطقة لمس 48dp. */
+@Composable
+private fun ProfileSectionHeader(
+    title: String,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 20.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            fontFamily = ElevenSerifFontFamily,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        if (actionLabel != null) {
+            Box(
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onAction)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    actionLabel,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    textDecoration = TextDecoration.Underline,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+        } else {
+            Spacer(Modifier.height(48.dp))
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  PROFILE INFO ROW — صف معلومات المستخدم
-// ═══════════════════════════════════════════════════════════════
-
+/** سطر «عنوان ← قيمة» بسيط مع خط فاصل رفيع. */
 @Composable
-private fun ProfileInfoRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.padding(vertical = 14.dp),
-    ) {
-        Box(
+private fun ProfileValueRow(label: String, value: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .size(36.dp)
-                .background(Accent.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .padding(vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, null, tint = Accent, modifier = Modifier.size(18.dp))
+            Text(label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
         }
-        Column {
-            Text(label, color = MutedForeground, fontSize = 12.sp)
-            Text(value, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    }
+}
+
+/** سطر قابل للضغط: نص + عدّاد اختياري + سهم. */
+@Composable
+private fun ProfileLinkRow(label: String, trailing: String?, onClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .heightIn(min = 52.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            if (trailing != null) {
+                Text(trailing, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(4.dp))
+            }
+            Icon(
+                Icons.Filled.ChevronLeft,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
     }
 }
 

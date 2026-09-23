@@ -43,7 +43,11 @@ class ElevenFirebaseMessagingService : FirebaseMessagingService() {
         val actionRoute = data["actionRoute"]?.takeIf { it.isNotBlank() }
         val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
 
-        showNotification(notificationId, title, body, type, actionRoute, imageUrl)
+        // ✅ جديد: احترام تفضيل المستخدم من الإعدادات (إشعارات الجوال). عند
+        // إيقافه لا يُعرض إشعار النظام، بينما يبقى سجل الإشعار داخل التطبيق.
+        if (com.eleven.store.util.AppPreferences.isPushEnabled(this)) {
+            showNotification(notificationId, title, body, type, actionRoute, imageUrl)
+        }
 
         // لا كتابة على "users/{uid}/notifications" من هنا عمداً — سجل
         // الإشعار مكتوب بالفعل قبل وصول هذا الـPush أصلاً (نواة notify() في

@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -51,10 +53,18 @@ fun SettingsScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
     onNavigateToLogin: () -> Unit = onBack,
+    onNavigateToContact: () -> Unit = {},
+    onNavigateToAbout: () -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
+
+    // ✅ جديد: تفضيل إشعارات الجوال (Push) — يُحفظ محلياً ويقرأه
+    // ElevenFirebaseMessagingService قبل عرض أي إشعار.
+    var pushEnabled by remember {
+        mutableStateOf(com.eleven.store.util.AppPreferences.isPushEnabled(context))
+    }
 
     // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com — لو مفيش رابط
     // موقع حقيقي مضبوط من الأدمن، baseUrl تبقى فاضية والأزرار تحت بتتصرف
@@ -276,34 +286,52 @@ fun SettingsScreen(
         ) {
             // ── الحساب ──────────────────────────────────
             item {
-                AccountSection(
-                    user = user,
-                    isGoogleAccount = isGoogleAccount,
-                    canChangePassword = hasPasswordProvider,
-                    showChangePassword = showChangePassword,
-                    onToggleChangePassword = { showChangePassword = !showChangePassword },
-                    currentPassword = currentPassword,
-                    onCurrentPasswordChange = { currentPassword = it },
-                    newPassword = newPassword,
-                    onNewPasswordChange = { newPassword = it },
-                    confirmPassword = confirmPassword,
-                    onConfirmPasswordChange = { confirmPassword = it },
-                    showCurrentPw = showCurrentPw,
-                    onToggleShowCurrentPw = { showCurrentPw = !showCurrentPw },
-                    showNewPw = showNewPw,
-                    onToggleShowNewPw = { showNewPw = !showNewPw },
-                    isLoading = isLoading,
-                    onSavePassword = onSavePassword,
-                    onCancelChangePassword = { showChangePassword = false },
-                    onNavigateToLogin = onNavigateToLogin,
-                )
+                SettingsSection(title = "الحساب") {
+                    AccountSection(
+                        user = user,
+                        isGoogleAccount = isGoogleAccount,
+                        canChangePassword = hasPasswordProvider,
+                        showChangePassword = showChangePassword,
+                        onToggleChangePassword = { showChangePassword = !showChangePassword },
+                        currentPassword = currentPassword,
+                        onCurrentPasswordChange = { currentPassword = it },
+                        newPassword = newPassword,
+                        onNewPasswordChange = { newPassword = it },
+                        confirmPassword = confirmPassword,
+                        onConfirmPasswordChange = { confirmPassword = it },
+                        showCurrentPw = showCurrentPw,
+                        onToggleShowCurrentPw = { showCurrentPw = !showCurrentPw },
+                        showNewPw = showNewPw,
+                        onToggleShowNewPw = { showNewPw = !showNewPw },
+                        isLoading = isLoading,
+                        onSavePassword = onSavePassword,
+                        onCancelChangePassword = { showChangePassword = false },
+                        onNavigateToLogin = onNavigateToLogin,
+                    )
+                }
             }
 
-            // ── القانونية — تظهر فقط لو رابط الموقع مضبوط من الأدمن، بدل أزرار
-            //    ميتة تعرض "الصفحة غير متاحة" عند كل ضغطة.
-            if (baseUrl.isNotBlank()) {
-                item {
-                    LegalSection(
+            // ── التفضيلات ───────────────────────────────
+            item {
+                SettingsSection(title = "التفضيلات") {
+                    PreferencesSection(
+                        pushEnabled = pushEnabled,
+                        onPushChange = { enabled ->
+                            pushEnabled = enabled
+                            com.eleven.store.util.AppPreferences.setPushEnabled(context, enabled)
+                        },
+                    )
+                }
+            }
+
+            // ── المساعدة والقانوني — الرابطان القانونيان يظهران فقط لو رابط
+            //    الموقع مضبوط من الأدمن، بدل أزرار ميتة تعرض "الصفحة غير متاحة".
+            item {
+                SettingsSection(title = "المساعدة والقانوني") {
+                    HelpSection(
+                        onContact = onNavigateToContact,
+                        onAbout = onNavigateToAbout,
+                        showLegal = baseUrl.isNotBlank(),
                         onOpenPrivacyPolicy = onOpenPrivacyPolicy,
                         onOpenTermsOfService = onOpenTermsOfService,
                     )
@@ -374,10 +402,24 @@ fun SettingsScreen(
 //  وصيانة كل قسم لوحده بدل دالة واحدة ضخمة.
 // ═══════════════════════════════════════════════════════════════
 
+/** عنوان قسم صغير رمادي فوق البطاقة. */
+@Composable
+private fun SettingsSection(title: String, content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            title,
+            fontSize = 12.sp,
+            color = MutedForeground,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        content()
+    }
+}
+
 @Composable
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, Border),
     ) {
@@ -385,29 +427,78 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     }
 }
 
-/** صف إعداد قابل للضغط: أيقونة + نص + سهم — نفس الشكل بكل الأقسام. */
+/** صف إعداد قابل للضغط: أيقونة + نص (+ سطر ثانوي اختياري) + سهم. */
 @Composable
 private fun SettingsRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    subtitle: String? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(icon, null, tint = MutedForeground, modifier = Modifier.size(20.dp))
-        Text(
-            label,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
-        )
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            if (subtitle != null) {
+                Text(subtitle, fontSize = 12.sp, color = MutedForeground)
+            }
+        }
         Icon(Icons.Filled.ChevronLeft, null, tint = MutedForeground, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** صف بمفتاح تبديل (Switch): الصف كله قابل للضغط. */
+@Composable
+private fun SettingsSwitchRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    subtitle: String?,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            if (subtitle != null) {
+                Text(subtitle, fontSize = 12.sp, color = MutedForeground)
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = Accent,
+                uncheckedThumbColor = Color.White,
+                uncheckedTrackColor = Neutral300,
+                uncheckedBorderColor = Color.Transparent,
+            ),
+        )
     }
 }
 
@@ -460,7 +551,7 @@ private fun AccountSection(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Filled.Person, null, tint = Accent, modifier = Modifier.size(22.dp))
+            Icon(Icons.Filled.Email, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     user.email.orEmpty(),
@@ -631,22 +722,55 @@ private fun ChangePasswordForm(
 }
 
 @Composable
-private fun LegalSection(
+private fun PreferencesSection(
+    pushEnabled: Boolean,
+    onPushChange: (Boolean) -> Unit,
+) {
+    SettingsCard {
+        SettingsSwitchRow(
+            icon = Icons.Filled.Notifications,
+            label = "إشعارات الجوال",
+            subtitle = "تنبيهات الطلبات والعروض على هاتفك",
+            checked = pushEnabled,
+            onCheckedChange = onPushChange,
+        )
+    }
+}
+
+@Composable
+private fun HelpSection(
+    onContact: () -> Unit,
+    onAbout: () -> Unit,
+    showLegal: Boolean,
     onOpenPrivacyPolicy: () -> Unit,
     onOpenTermsOfService: () -> Unit,
 ) {
     SettingsCard {
         SettingsRow(
-            icon = Icons.Filled.PrivacyTip,
-            label = "سياسة الخصوصية",
-            onClick = onOpenPrivacyPolicy,
+            icon = Icons.Filled.Phone,
+            label = "اتصل بنا",
+            onClick = onContact,
         )
         HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
         SettingsRow(
-            icon = Icons.Filled.Description,
-            label = "الشروط والأحكام",
-            onClick = onOpenTermsOfService,
+            icon = Icons.Filled.Info,
+            label = "حول Eleven",
+            onClick = onAbout,
         )
+        if (showLegal) {
+            HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRow(
+                icon = Icons.Filled.PrivacyTip,
+                label = "سياسة الخصوصية",
+                onClick = onOpenPrivacyPolicy,
+            )
+            HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRow(
+                icon = Icons.Filled.Description,
+                label = "الشروط والأحكام",
+                onClick = onOpenTermsOfService,
+            )
+        }
     }
 }
 
@@ -657,25 +781,25 @@ private fun LogoutButton(onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .height(48.dp),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            Destructive,
+            MaterialTheme.colorScheme.outline,
         ),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = Destructive,
+            contentColor = MaterialTheme.colorScheme.onBackground,
         ),
     ) {
         Icon(
             Icons.AutoMirrored.Filled.ExitToApp,
             null,
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(20.dp),
         )
         Spacer(Modifier.width(8.dp))
         Text(
             "تسجيل الخروج",
             fontWeight = FontWeight.SemiBold,
-            fontSize = 16.sp,
+            fontSize = 15.sp,
         )
     }
 }

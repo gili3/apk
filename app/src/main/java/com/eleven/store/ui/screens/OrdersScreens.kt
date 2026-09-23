@@ -1,13 +1,10 @@
 package com.eleven.store.ui.screens
 
-import android.content.Intent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -18,8 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,7 +25,6 @@ import coil.compose.AsyncImage
 import com.eleven.store.data.model.*
 import com.eleven.store.ui.components.ElevenButton
 import com.eleven.store.ui.components.ElevenTopBar
-import com.eleven.store.ui.components.InvoiceQrCode
 import com.eleven.store.ui.components.OrderStatusBadge
 import com.eleven.store.ui.theme.*
 import com.eleven.store.ui.viewmodel.MainViewModel
@@ -38,9 +32,7 @@ import com.eleven.store.ui.viewmodel.MainViewModel
 // ═══════════════════════════════════════════════════════════════
 //  دوال مساعدة مشتركة
 // ═══════════════════════════════════════════════════════════════
-
-/** تنسيق السعر بالعملة — "1,234.56 ج.س" */
-// ملاحظة: تنسيق السعر أصبح موحداً عبر formatPrice() في ScreenCommon.kt
+// ملاحظة: تنسيق السعر موحّد عبر formatPrice() في ScreenCommon.kt
 
 /** تسمية طريقة الدفع */
 private fun paymentMethodLabel(method: String): String = when (method) {
@@ -60,17 +52,15 @@ private fun formatArabicDate(date: java.util.Date): String {
     return "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${months[cal.get(java.util.Calendar.MONTH)]} ${cal.get(java.util.Calendar.YEAR)}"
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  ORDER STATUS BADGE — ✅ إصلاح: كانت هذه نسخة محلية مكرَّرة بألوان
-//  مختلفة تماماً (شفافية 10%/حدود) عن OrderStatusBadge الموحّدة في
-//  ui/components/Components.kt (التي تستخدم الآن القيم الست عشرية
-//  الثابتة المطلوبة). حُذفت هذه النسخة، ويُستخدم بدلاً منها الاستيراد
-//  أدناه في كل مكان بهذا الملف — لضمان لون واحد متطابق 100% لكل
-//  حالة طلب داخل التطبيق بأكمله.
-// ═══════════════════════════════════════════════════════════════
+/** ✅ إجمالي واحد موحّد للقائمة والتفاصيل (كانا يحسبانه بطريقتين مختلفتين). */
+private fun orderTotal(order: Order): Double {
+    if (order.total > 0) return order.total
+    val subtotal = order.items.sumOf { it.price * it.quantity }
+    return (subtotal - order.discount + order.shippingCost).coerceAtLeast(0.0)
+}
 
 // ═══════════════════════════════════════════════════════════════
-//  ORDERS SCREEN — نسخة طبق الأصل من Orders.tsx
+//  ORDERS SCREEN — تصميم «البسيط»: صفوف بخطوط فاصلة بلا بطاقات
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -83,14 +73,18 @@ fun OrdersScreen(
 ) {
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val orders by viewModel.orders.collectAsStateWithLifecycle()
-    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // ✅ إصلاح: كانت الشاشة تستخدم isLoading الخاص بالمنتجات، فتظهر "لا توجد
+    // طلبات" قبل انتهاء تحميل الطلبات، وسبينر كلما تحمّلت المنتجات.
+    val ordersLoaded by viewModel.ordersLoaded.collectAsStateWithLifecycle()
 
     LaunchedEffect(user) { if (user != null) viewModel.loadOrders() }
 
-    // ✅ إصلاح: FirestoreRepository.getOrders() تُرجع قائمة فارغة بصمت
-    // لزائر غير مسجّل دخول (uid == null) بدل رمي خطأ — فكانت هذه الشاشة
-    // تعرض "لا توجد طلبات بعد" المُضلِّلة تماماً كما في نسخة الموقع
-    // (Orders.tsx، تم إصلاحها بنفس المنطق).
+    val onSurface = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val line = MaterialTheme.colorScheme.outline
+
+    // ✅ إصلاح: getOrders() تُرجع قائمة فارغة بصمت لزائر غير مسجّل دخول،
+    // فكانت الشاشة تعرض "لا توجد طلبات بعد" المُضلِّلة.
     if (user == null) {
         Scaffold(topBar = { ElevenTopBar(title = "طلباتي", onBack = onBack) }) { padding ->
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -102,11 +96,11 @@ fun OrdersScreen(
                         Icons.Filled.ShoppingBag,
                         null,
                         modifier = Modifier.size(64.dp),
-                        tint = MutedForeground,
+                        tint = muted,
                     )
                     Text(
                         "يرجى تسجيل الدخول لعرض طلباتك",
-                        color = MutedForeground,
+                        color = muted,
                         fontSize = 16.sp,
                     )
                     ElevenButton(
@@ -123,16 +117,12 @@ fun OrdersScreen(
     Scaffold(topBar = { ElevenTopBar(title = "طلباتي", onBack = onBack) }) { padding ->
         when {
             // ── تحميل ──
-            isLoading -> {
+            !ordersLoaded && orders.isEmpty() -> {
                 Box(
                     Modifier.fillMaxSize().padding(padding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = Accent, strokeWidth = 3.dp)
-                        Spacer(Modifier.height(16.dp))
-                        Text("جاري التحميل...", color = MutedForeground, fontSize = 14.sp)
-                    }
+                    CircularProgressIndicator(color = onSurface, strokeWidth = 3.dp)
                 }
             }
 
@@ -146,44 +136,33 @@ fun OrdersScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(32.dp),
                     ) {
-                        Box(
-                            Modifier
-                                .size(96.dp)
-                                .background(Accent.copy(alpha = 0.1f), CircleShape)
-                                .border(2.dp, Accent, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Filled.ShoppingBag,
-                                null,
-                                modifier = Modifier.size(48.dp),
-                                tint = Accent,
-                            )
-                        }
-                        Spacer(Modifier.height(24.dp))
+                        Icon(
+                            Icons.Filled.ShoppingBag,
+                            null,
+                            modifier = Modifier.size(56.dp),
+                            tint = muted,
+                        )
+                        Spacer(Modifier.height(20.dp))
                         Text(
                             "لا توجد طلبات بعد",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 28.sp,
-                            fontFamily = FontFamily.Serif,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 20.sp,
+                            color = onSurface,
                             textAlign = TextAlign.Center,
                         )
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            "ابدأ التسوق الآن واستمتع بمنتجاتنا الرائعة والمختارة بعناية",
-                            color = MutedForeground,
-                            fontSize = 16.sp,
+                            "ابدأ التسوق الآن وستظهر طلباتك هنا",
+                            color = muted,
+                            fontSize = 14.sp,
                             textAlign = TextAlign.Center,
                         )
-                        Spacer(Modifier.height(32.dp))
+                        Spacer(Modifier.height(24.dp))
                         ElevenButton(
                             text = "ابدأ التسوق",
                             onClick = onStartShopping,
                             icon = Icons.Filled.ShoppingBag,
-                            modifier = Modifier
-                                .fillMaxWidth(0.6f)
-                                .height(48.dp),
+                            modifier = Modifier.fillMaxWidth(0.6f),
                         )
                     }
                 }
@@ -193,54 +172,24 @@ fun OrdersScreen(
             else -> {
                 LazyColumn(
                     contentPadding = PaddingValues(
-                        start = 16.dp, end = 16.dp,
-                        top = 8.dp + padding.calculateTopPadding(),
+                        start = 20.dp, end = 20.dp,
+                        top = 4.dp + padding.calculateTopPadding(),
                         bottom = 24.dp + padding.calculateBottomPadding(),
                     ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    // Header
-                    item {
-                        Column(Modifier.padding(bottom = 8.dp)) {
-                            Text(
-                                "طلباتي",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 36.sp,
-                                fontFamily = FontFamily.Serif,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Box(Modifier.width(48.dp).height(4.dp).background(Accent, RoundedCornerShape(2.dp)))
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                "تتبع جميع طلباتك وحالتها",
-                                color = MutedForeground,
-                                fontSize = 14.sp,
-                            )
-                        }
-                    }
-
                     items(orders, key = { it.id }) { order ->
-                        val dateObj = order.createdAt?.toDate() ?: java.util.Date()
+                        val date = order.createdAt?.toDate()?.let { formatArabicDate(it) }
                         val itemCount = order.items.size
-                        val total = if (order.total > 0) order.total
-                                    else order.items.sumOf { it.price * it.quantity } + order.shippingCost
+                        val total = orderTotal(order)
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onOrderClick(order.id) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                        ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.Top,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onOrderClick(order.id) }
+                                    .heightIn(min = 72.dp)
+                                    .padding(vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
                                     Row(
@@ -249,47 +198,38 @@ fun OrdersScreen(
                                     ) {
                                         Text(
                                             "طلب #${order.orderNumber}",
-                                            fontWeight = FontWeight.Bold,
+                                            fontWeight = FontWeight.Medium,
                                             fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onBackground,
+                                            color = onSurface,
                                         )
                                         OrderStatusBadge(order.status)
                                     }
-                                    Spacer(Modifier.height(6.dp))
+                                    val meta = listOfNotNull(
+                                        date,
+                                        if (itemCount > 0) "عدد المنتجات: $itemCount" else null,
+                                    ).joinToString(" · ")
+                                    if (meta.isNotBlank()) {
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(meta, color = muted, fontSize = 12.sp)
+                                    }
+                                }
+                                if (total > 0) {
                                     Text(
-                                        formatArabicDate(dateObj),
-                                        color = MutedForeground,
-                                        fontSize = 12.sp,
+                                        formatPrice(total),
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp,
+                                        color = onSurface,
                                     )
-                                    if (itemCount > 0) {
-                                        Spacer(Modifier.height(2.dp))
-                                        Text(
-                                            "عدد المنتجات: $itemCount",
-                                            color = MutedForeground,
-                                            fontSize = 12.sp,
-                                        )
-                                    }
+                                    Spacer(Modifier.width(8.dp))
                                 }
-                                Column(
-                                    horizontalAlignment = Alignment.End,
-                                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    if (total > 0) {
-                                        Text(
-                                            formatPrice(total),
-                                            fontWeight = FontWeight.Bold,
-                                            color = Accent,
-                                            fontSize = 14.sp,
-                                        )
-                                    }
-                                    Icon(
-                                        Icons.Filled.Visibility,
-                                        null,
-                                        tint = Accent,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
+                                Icon(
+                                    Icons.Filled.ChevronLeft,
+                                    contentDescription = null,
+                                    tint = muted,
+                                    modifier = Modifier.size(20.dp),
+                                )
                             }
+                            HorizontalDivider(color = line)
                         }
                     }
                 }
@@ -299,7 +239,7 @@ fun OrdersScreen(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  ORDER DETAIL SCREEN — نسخة طبق الأصل من OrderDetail.tsx
+//  ORDER DETAIL SCREEN — بلا فاتورة: الحالة، المنتجات، الملخص، التوصيل، الدفع
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -314,8 +254,6 @@ fun OrderDetailScreen(
 ) {
     val order by viewModel.selectedOrder.collectAsStateWithLifecycle()
     val isOrderLoading by viewModel.isOrderLoading.collectAsStateWithLifecycle()
-    val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
-    val context = LocalContext.current
 
     // ✅ نفرّق بين "لم يبدأ التحميل بعد" و"انتهى التحميل بلا نتيجة" — بدون
     // هذا التمييز، isOrderLoading==false في أول تركيب (قبل انطلاق
@@ -338,406 +276,169 @@ fun OrderDetailScreen(
         }
     }
 
+    val onSurface = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val line = MaterialTheme.colorScheme.outline
+
     Scaffold(topBar = { ElevenTopBar(title = "تفاصيل الطلب", onBack = onBack) }) { padding ->
-        when {
+        val o = order
+        if (o == null) {
             // ── تحميل (أو تأكّد عدم الوجود وجارٍ التحويل لصفحة الإشعارات) ──
-            order == null -> {
-                Box(
-                    Modifier.fillMaxSize().padding(padding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = Accent)
-                }
+            Box(
+                Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = onSurface)
             }
+        } else {
+            val subtotal = if (o.subtotal > 0) o.subtotal else o.items.sumOf { it.price * it.quantity }
+            val total = orderTotal(o)
+            val date = o.createdAt?.toDate()?.let { formatArabicDate(it) }
+            val address = o.shippingAddress
 
-            // ── تفاصيل الطلب ──
-            else -> {
-                val o = order!!
-                val statusLabel = o.status.label
-                val paymentLabel = paymentMethodLabel(o.paymentMethod)
-                val dateObj = o.createdAt?.toDate() ?: java.util.Date()
-                val formattedDate = formatArabicDate(dateObj)
-                val subtotal = o.items.sumOf { it.price * it.quantity }
-                val total = if (o.total > 0) o.total else subtotal - o.discount + o.shippingCost
-
-                LazyColumn(
-                    contentPadding = PaddingValues(
-                        start = 16.dp, end = 16.dp,
-                        top = 16.dp + padding.calculateTopPadding(),
-                        bottom = 24.dp + padding.calculateBottomPadding(),
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    // ── Header ───────────────────────────
-                    item {
-                        Column {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Text(
-                                    "طلب #${o.orderNumber}",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 30.sp,
-                                    fontFamily = FontFamily.Serif,
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                )
-                                OrderStatusBadge(o.status)
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(formattedDate, color = MutedForeground, fontSize = 14.sp)
-                            Spacer(Modifier.height(12.dp))
-                            Box(Modifier.width(40.dp).height(4.dp).background(Accent, RoundedCornerShape(2.dp)))
-                        }
-                    }
-
-                    // ✅ إصلاح: تمت إزالة بطاقات "معلومات الطلب" و"عنوان الشحن"
-                    // و"المنتجات" — بياناتها مكرَّرة أصلاً داخل بطاقة الفاتورة
-                    // (InvoiceCard) بالأسفل (الحالة، طريقة الدفع، التاريخ،
-                    // المنتجات، الإجمالي، عنوان العميل)، فأصبحت الشاشة تعرض
-                    // الفاتورة فقط دون تكرار — بنفس تعديل نسخة الموقع.
-
-                    // ── الفاتورة ─────────────────────────
-                    item {
-                        Column(Modifier.padding(top = 8.dp)) {
-                            Text(
-                                "الفاتورة",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                                fontFamily = FontFamily.Serif,
-                                color = MaterialTheme.colorScheme.onBackground,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Box(Modifier.width(32.dp).height(4.dp).background(Accent, RoundedCornerShape(2.dp)))
-                        }
-                    }
-
-                    item {
-                        InvoiceCard(
-                            order = o,
-                            storeSettings = storeSettings,
-                            subtotal = subtotal,
-                            total = total,
-                            statusLabel = statusLabel,
-                            paymentLabel = paymentLabel,
-                            formattedDate = formattedDate,
-                        )
-                    }
-
-                    // ── زر طباعة الفاتورة ────────────────
-                    item {
-                        Box(
-                            Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center,
+            LazyColumn(
+                contentPadding = PaddingValues(
+                    start = 20.dp, end = 20.dp,
+                    top = 8.dp + padding.calculateTopPadding(),
+                    bottom = 32.dp + padding.calculateBottomPadding(),
+                ),
+            ) {
+                // ── الرأس ──
+                item {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            ElevenButton(
-                                text = "طباعة الفاتورة",
-                                onClick = { shareOrPrintInvoice(context, o, storeSettings) },
-                                icon = Icons.Filled.Print,
-                                modifier = Modifier
-                                    .fillMaxWidth(0.7f)
-                                    .height(48.dp),
+                            Text(
+                                "طلب #${o.orderNumber}",
+                                fontFamily = ElevenSerifFontFamily,
+                                fontSize = 26.sp,
+                                color = onSurface,
                             )
+                            OrderStatusBadge(o.status)
+                        }
+                        if (date != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(date, color = muted, fontSize = 13.sp)
                         }
                     }
                 }
-            }
-        }
-    }
-}
 
-// ═══════════════════════════════════════════════════════════════
-//  INFO ROW — صف معلومات داخل البطاقات
-// ═══════════════════════════════════════════════════════════════
+                // ── المنتجات ──
+                item { OrderSectionHeader("المنتجات") }
+                items(o.items) { line2 ->
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                            ) {
+                                if (line2.image.isNotBlank()) {
+                                    AsyncImage(
+                                        model = line2.image,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    line2.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = onSurface,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "${line2.quantity} × ${formatPrice(line2.price)}",
+                                    fontSize = 12.sp,
+                                    color = muted,
+                                )
+                            }
+                            Text(
+                                formatPrice(line2.price * line2.quantity),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = onSurface,
+                            )
+                        }
+                        HorizontalDivider(color = line)
+                    }
+                }
 
-@Composable
-private fun InfoRow(
-    label: String,
-    value: String? = null,
-    bold: Boolean = true,
-    content: (@Composable () -> Unit)? = null,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 10.dp),
-        Arrangement.SpaceBetween,
-        Alignment.CenterVertically,
-    ) {
-        Text(label, color = MutedForeground, fontSize = 14.sp)
-        if (content != null) content()
-        else Text(
-            value ?: "",
-            fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  INVOICE CARD — نسخة طبق الأصل من InvoicePrint في OrderDetail.tsx
-// ═══════════════════════════════════════════════════════════════
-
-@Composable
-private fun InvoiceCard(
-    order: Order,
-    storeSettings: StoreSettings,
-    subtotal: Double,
-    total: Double,
-    statusLabel: String,
-    paymentLabel: String,
-    formattedDate: String,
-) {
-    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com نهائياً — الدومين ده
-    // بقى بيفتح لوحة تحكم الأدمن الداخلية، مش صفحة تحقق من الطلب. لو الأدمن
-    // لسه مضبطش رابط موقع فعلي من storeSettings، الرابط بيبقى فاضياً
-    // والقسم بيتخفي بدل ما يوجّه العميل بالغلط لصفحة الأدمن.
-    val verifyUrl = remember(order.verificationToken, storeSettings.websiteUrl) {
-        val base = storeSettings.websiteUrl.trim().trimEnd('/')
-        if (base.isBlank()) "" else "$base/verify-order/${order.verificationToken}"
-    }
-
-    val brandColor = Accent
-    val brandTint = Accent.copy(alpha = 0.1f)
-
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-    ) {
-        Column(modifier = Modifier.padding(24.dp)) {
-            // ── Header ──────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 30.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column {
-                    Text(
-                        "11",
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = brandColor,
-                        fontFamily = FontFamily.Serif,
-                    )
-                    Text(
-                        "ELEVEN",
-                        fontSize = 10.sp,
-                        letterSpacing = 3.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = brandColor,
-                    )
-                    if (storeSettings.address.isNotBlank()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            storeSettings.address,
-                            fontSize = 12.sp,
-                            color = MutedForeground,
+                // ── الملخص ──
+                item { OrderSectionHeader("الملخص") }
+                item { OrderValueRow("المجموع الفرعي", formatPrice(subtotal)) }
+                if (o.discount > 0) {
+                    item {
+                        OrderValueRow(
+                            label = if (o.couponCode.isNullOrBlank()) "الخصم" else "الخصم (${o.couponCode})",
+                            value = "-${formatPrice(o.discount)}",
+                            valueColor = Success,
                         )
                     }
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        "INVOICE",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = brandColor,
-                        letterSpacing = 2.sp,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "#${order.orderNumber}",
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        formattedDate,
-                        fontSize = 12.sp,
-                        color = MutedForeground,
+                item {
+                    OrderValueRow(
+                        "الشحن",
+                        if (o.shippingCost > 0) formatPrice(o.shippingCost) else "مجاني",
                     )
                 }
-            }
-
-            // ── Customer + Status ───────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 30.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "العميل",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = brandColor,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        order.shippingAddress?.displayName ?: "-",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        order.shippingAddress?.phone ?: "-",
-                        color = MutedForeground,
-                        fontSize = 13.sp,
-                    )
-                    Text(
-                        "${order.shippingAddress?.city ?: ""} — ${order.shippingAddress?.address ?: ""}",
-                        color = MutedForeground,
-                        fontSize = 13.sp,
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "حالة الطلب",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = brandColor,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Box(
-                        Modifier
-                            .background(brandTint, RoundedCornerShape(6.dp))
-                            .border(1.dp, brandColor.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text(
-                            statusLabel,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = brandColor,
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        paymentLabel,
-                        fontSize = 13.sp,
-                        color = MutedForeground,
-                    )
-                }
-            }
-
-            // ── Products Table ──────────────────────────
-            HorizontalDivider(color = Border)
-            Spacer(Modifier.height(16.dp))
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(brandTint)
-                    .padding(vertical = 12.dp, horizontal = 8.dp),
-            ) {
-                Text("المنتج", Modifier.weight(2f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                Text("الكمية", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
-                Text("السعر", Modifier.weight(1.2f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
-                Text("المجموع", Modifier.weight(1.2f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
-            }
-
-            order.items.forEach { item ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                ) {
-                    Text(item.name, Modifier.weight(2f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onBackground)
-                    Text("${item.quantity}", Modifier.weight(1f), fontSize = 14.sp, color = MutedForeground, textAlign = TextAlign.Center)
-                    Text(formatPrice(item.price), Modifier.weight(1.2f), fontSize = 14.sp, color = MutedForeground, textAlign = TextAlign.Center)
-                    Text(formatPrice(item.price * item.quantity), Modifier.weight(1.2f), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
-                }
-                HorizontalDivider(color = Border)
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // ── Totals ──────────────────────────────────
-            Column(Modifier.fillMaxWidth(0.62f).align(Alignment.End)) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    Arrangement.SpaceBetween,
-                ) {
-                    Text("المجموع الفرعي", fontSize = 14.sp, color = MutedForeground)
-                    Text(formatPrice(subtotal), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
-                }
-                HorizontalDivider(color = Border)
-                if (order.discount > 0) {
+                item {
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                        Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            if (order.couponCode.isNullOrBlank()) "الخصم" else "الخصم (${order.couponCode})",
-                            fontSize = 14.sp,
-                            color = MutedForeground,
-                        )
-                        Text(
-                            "-${formatPrice(order.discount)}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = Success,
+                        Text("الإجمالي", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = onSurface)
+                        Text(formatPrice(total), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = onSurface)
+                    }
+                }
+
+                // ── التوصيل ──
+                if (address != null) {
+                    item { OrderSectionHeader("التوصيل") }
+                    item { OrderValueRow("المستلم", address.displayName.ifBlank { "-" }) }
+                    item { OrderValueRow("الهاتف", address.phone.ifBlank { "-" }) }
+                    item {
+                        OrderValueRow(
+                            "العنوان",
+                            listOf(address.city, address.address).filter { it.isNotBlank() }
+                                .joinToString("، ").ifBlank { "-" },
                         )
                     }
-                    HorizontalDivider(color = Border)
                 }
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                    Arrangement.SpaceBetween,
-                ) {
-                    Text("الشحن", fontSize = 14.sp, color = MutedForeground)
-                    Text(
-                        if (order.shippingCost > 0) formatPrice(order.shippingCost) else "مجاني",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(brandTint, RoundedCornerShape(8.dp))
-                        .border(2.dp, brandColor, RoundedCornerShape(8.dp))
-                        .padding(16.dp),
-                    Arrangement.SpaceBetween,
-                    Alignment.CenterVertically,
-                ) {
-                    Text("الإجمالي", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-                    Text(formatPrice(total), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = brandColor)
-                }
-            }
 
-            // ── QR (تظهر فقط لو الأدمن ضبط رابط موقع حقيقي) ──
-            if (verifyUrl.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = Border)
+                // ── الدفع ──
+                item { OrderSectionHeader("الدفع") }
+                item { OrderValueRow("طريقة الدفع", paymentMethodLabel(o.paymentMethod)) }
 
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 40.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    InvoiceQrCode(value = verifyUrl, sizeDp = 110.dp)
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "تحقق من صحة الطلب عبر مسح الرمز",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "شكراً لتسوقكم من ${storeSettings.storeName.ifBlank { "Eleven" }}",
-                        fontSize = 12.sp,
-                        color = MutedForeground,
-                    )
+                // ── ملاحظات ──
+                if (o.notes.isNotBlank()) {
+                    item { OrderSectionHeader("ملاحظات") }
+                    item {
+                        Text(
+                            o.notes,
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp,
+                            color = muted,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
                 }
             }
         }
@@ -745,26 +446,45 @@ private fun InvoiceCard(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  مشاركة / طباعة الفاتورة
+//  عناصر شاشة تفاصيل الطلب
 // ═══════════════════════════════════════════════════════════════
 
-private fun shareOrPrintInvoice(
-    context: android.content.Context,
-    order: Order,
-    storeSettings: StoreSettings,
-) {
-    // ✅ إصلاح: أُزيل التوجيه الافتراضي لـ eleven-sd.com — لو مفيش رابط
-    // موقع حقيقي مضبوط، نشارك تفاصيل الفاتورة نصياً بدون رابط بدل رابط
-    // يوصّل لصفحة الأدمن بالغلط.
-    val base = storeSettings.websiteUrl.trim().trimEnd('/')
-    val shareText = if (base.isBlank()) {
-        "فاتورة الطلب #${order.orderNumber}"
-    } else {
-        "فاتورة الطلب #${order.orderNumber}\n$base/verify-order/${order.verificationToken}"
+/** عنوان قسم بخط Serif مع خط فاصل رفيع. */
+@Composable
+private fun OrderSectionHeader(title: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            title,
+            fontFamily = ElevenSerifFontFamily,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(top = 28.dp, bottom = 8.dp),
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
     }
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_TEXT, shareText)
+}
+
+/** سطر «عنوان ← قيمة» مع خط فاصل رفيع. */
+@Composable
+private fun OrderValueRow(label: String, value: String, valueColor: Color? = null) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = valueColor ?: MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
     }
-    context.startActivity(Intent.createChooser(intent, "مشاركة الفاتورة"))
 }

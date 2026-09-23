@@ -467,6 +467,23 @@ class MainViewModel : ViewModel() {
     private val _orders = MutableStateFlow<List<Order>>(emptyList())
     val orders: StateFlow<List<Order>> = _orders
 
+    // ✅ جديد: هل اكتمل تحميل الطلبات فعلياً؟ (شاشة الطلبات كانت تستخدم isLoading
+    // الخاص بالمنتجات — فتعرض سبينر عند تحميل المنتجات، و"لا توجد طلبات" قبل
+    // انتهاء تحميل الطلبات.)
+    private val _ordersLoaded = MutableStateFlow(false)
+    val ordersLoaded: StateFlow<Boolean> = _ordersLoaded
+
+    // ✅ جديد: عند تغيّر المستخدم (خروج/دخول بحساب آخر) نمسح الطلبات المخزّنة
+    // حتى لا تظهر طلبات الحساب السابق للحساب الجديد.
+    init {
+        viewModelScope.launch {
+            currentUser.map { it?.uid }.distinctUntilChanged().collect {
+                _orders.value = emptyList()
+                _ordersLoaded.value = false
+            }
+        }
+    }
+
     private val _selectedOrder = MutableStateFlow<Order?>(null)
     val selectedOrder: StateFlow<Order?> = _selectedOrder
 
@@ -740,7 +757,13 @@ class MainViewModel : ViewModel() {
     fun consumeOrderNotFoundMessage() { _orderNotFoundMessage.value = null }
 
     fun loadOrders() {
-        viewModelScope.launch { _orders.value = repo.getOrders() }
+        viewModelScope.launch {
+            try {
+                _orders.value = repo.getOrders()
+            } finally {
+                _ordersLoaded.value = true
+            }
+        }
     }
 
     fun loadOrder(orderId: String) {

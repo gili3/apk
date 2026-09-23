@@ -178,6 +178,7 @@ fun SettingsScreen(
         }
     }
 
+    // ✅ الصفوف تظهر دائماً، وتفتح رابط الموقع فقط (بلا صفحات داخلية).
     val onOpenPrivacyPolicy: () -> Unit = {
         if (baseUrl.isBlank()) {
             scope.launch { snackbarHostState.showMessage("الصفحة غير متاحة حالياً", SnackbarType.ERROR) }
@@ -324,14 +325,12 @@ fun SettingsScreen(
                 }
             }
 
-            // ── المساعدة والقانوني — الرابطان القانونيان يظهران فقط لو رابط
-            //    الموقع مضبوط من الأدمن، بدل أزرار ميتة تعرض "الصفحة غير متاحة".
+            // ── المساعدة والقانوني ───────────────────────
             item {
                 SettingsSection(title = "المساعدة والقانوني") {
                     HelpSection(
                         onContact = onNavigateToContact,
                         onAbout = onNavigateToAbout,
-                        showLegal = baseUrl.isNotBlank(),
                         onOpenPrivacyPolicy = onOpenPrivacyPolicy,
                         onOpenTermsOfService = onOpenTermsOfService,
                     )
@@ -741,7 +740,6 @@ private fun PreferencesSection(
 private fun HelpSection(
     onContact: () -> Unit,
     onAbout: () -> Unit,
-    showLegal: Boolean,
     onOpenPrivacyPolicy: () -> Unit,
     onOpenTermsOfService: () -> Unit,
 ) {
@@ -757,20 +755,18 @@ private fun HelpSection(
             label = "حول Eleven",
             onClick = onAbout,
         )
-        if (showLegal) {
-            HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
-            SettingsRow(
-                icon = Icons.Filled.PrivacyTip,
-                label = "سياسة الخصوصية",
-                onClick = onOpenPrivacyPolicy,
-            )
-            HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
-            SettingsRow(
-                icon = Icons.Filled.Description,
-                label = "الشروط والأحكام",
-                onClick = onOpenTermsOfService,
-            )
-        }
+        HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+        SettingsRow(
+            icon = Icons.Filled.PrivacyTip,
+            label = "سياسة الخصوصية",
+            onClick = onOpenPrivacyPolicy,
+        )
+        HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+        SettingsRow(
+            icon = Icons.Filled.Description,
+            label = "الشروط والأحكام",
+            onClick = onOpenTermsOfService,
+        )
     }
 }
 

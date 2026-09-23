@@ -50,16 +50,12 @@ import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
 //  PROFILE SCREEN — تصميم «البسيط»: بلا بطاقات، خطوط فاصلة رفيعة
-//  وعناوين Serif. الاسم بارز بالأعلى، ثم أقسام: البيانات، العناوين،
-//  حسابي (طلباتي/المفضلة/الإشعارات).
+//  وعناوين Serif. الاسم بارز بالأعلى، ثم قسما البيانات والعناوين.
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun ProfileScreen(
     viewModel: MainViewModel,
-    onNavigateToOrders: () -> Unit,
-    onNavigateToFavorites: () -> Unit,
-    onNavigateToNotifications: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToLogin: () -> Unit,
 ) {
@@ -67,9 +63,6 @@ fun ProfileScreen(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val addresses by viewModel.addresses.collectAsStateWithLifecycle()
     val addressesError by viewModel.addressesError.collectAsStateWithLifecycle()
-    val orders by viewModel.orders.collectAsStateWithLifecycle()
-    val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
-    val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
 
     var showForm by remember { mutableStateOf(false) }
     var editingAddress by remember { mutableStateOf<Address?>(null) }
@@ -84,12 +77,7 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(user) {
-        if (user != null) {
-            viewModel.loadAddresses()
-            viewModel.loadOrders()
-        }
-    }
+    LaunchedEffect(user) { if (user != null) viewModel.loadAddresses() }
     // ✅ إصلاح: نفس إصلاح CheckoutScreen — يعرض رسالة واضحة بدل قائمة عناوين
     // فارغة صامتة عند فشل التحميل فعلياً (غير متاح بلا إنترنت مثلاً)
     LaunchedEffect(addressesError) {
@@ -414,30 +402,6 @@ fun ProfileScreen(
                     }
                 }
             }
-
-            // ── حسابي ──
-            item { ProfileSectionHeader(title = "حسابي") }
-            item {
-                ProfileLinkRow(
-                    label = "طلباتي",
-                    trailing = orders.size.takeIf { it > 0 }?.toString(),
-                    onClick = onNavigateToOrders,
-                )
-            }
-            item {
-                ProfileLinkRow(
-                    label = "المفضلة",
-                    trailing = favoriteIds.size.takeIf { it > 0 }?.toString(),
-                    onClick = onNavigateToFavorites,
-                )
-            }
-            item {
-                ProfileLinkRow(
-                    label = "الإشعارات",
-                    trailing = unreadCount.takeIf { it > 0 }?.toString(),
-                    onClick = onNavigateToNotifications,
-                )
-            }
         }
     }
 
@@ -541,38 +505,6 @@ private fun ProfileValueRow(label: String, value: String) {
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onBackground,
-            )
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-    }
-}
-
-/** سطر قابل للضغط: نص + عدّاد اختياري + سهم. */
-@Composable
-private fun ProfileLinkRow(label: String, trailing: String?, onClick: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .heightIn(min = 52.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                label,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            if (trailing != null) {
-                Text(trailing, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(4.dp))
-            }
-            Icon(
-                Icons.Filled.ChevronLeft,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)

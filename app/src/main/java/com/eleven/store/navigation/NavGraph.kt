@@ -290,17 +290,6 @@ fun ElevenNavGraph(
         composable(Route.PROFILE) {
             ProfileScreen(
                 viewModel = viewModel,
-                onNavigateToOrders = { navController.navigate(Route.ORDERS) },
-                onNavigateToFavorites = {
-                    navController.navigate(Route.FAVORITES) {
-                        popUpTo(Route.HOME) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                },
-                onNavigateToNotifications = {
-                    navController.navigate(Route.NOTIFICATIONS) { launchSingleTop = true }
-                },
                 onNavigateToSettings = { navController.navigate(Route.SETTINGS) },
                 onNavigateToLogin = { navController.navigate(Route.LOGIN) },
             )

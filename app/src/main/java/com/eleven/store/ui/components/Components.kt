@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
@@ -22,19 +21,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.eleven.store.data.model.Product
 import com.eleven.store.ui.theme.Accent
-import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
 import com.eleven.store.ui.theme.DestructiveBg
 import com.eleven.store.ui.theme.Info
 import com.eleven.store.ui.theme.InfoBg
-import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.theme.Neutral200
 import com.eleven.store.ui.theme.OrderStatusColors
@@ -46,149 +42,80 @@ import com.eleven.store.ui.theme.Warning
 import com.eleven.store.ui.theme.WarningBg
 
 // ═══════════════════════════════════════════════════════════════
-//  PRODUCT CARD  — matches ProductCard.tsx
-// ═══════════════════════════════════════════════════════════════
-
-// ── مطابق تماماً لبطاقة صفحة Products.tsx بالموقع ──
-// ملاحظة: لا توجد شارة "جديد" بالموقع هنا (فقط خصم أو "مميز")،
-// ولا يوجد زر مفضلة فوق الصورة — المفضلة زر منفصل أسفل بجانب "إضافة للسلة".
-// كان زر "إضافة للسلة" مفقوداً بالكامل من هذه البطاقة بالتطبيق — تمت إضافته.
+//  PRODUCT CARD — تصميم مبسّط (صورة + اسم + سعر + مفضلة فقط)
+//  - بدون حدود/ظل حول البطاقة، زوايا دائرية واسعة، صورة بنسبة عمودية
+//  - بدون زر "إضافة للسلة" وبدون شارات خصم/مميز فوق البطاقة — الإضافة
+//    للسلة وتفاصيل العرض تظهر بصفحة المنتج بعد الضغط على البطاقة
+//  - العرض يُحدَّد من الخارج عبر modifier (fillMaxWidth بالشبكة،
+//    width(160.dp) بصف الرئيسية الأفقي) ليبقى الشكل والمحتوى متطابقين
+//    تماماً بين الشاشتين
 @Composable
 fun ProductCard(
     product: Product,
     isFavorite: Boolean,
     onFavoriteToggle: () -> Unit,
-    onAddToCart: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    // ملاحظة: كانت هذه دالة منفصلة بصيغة "%.2f ج.س" بدون فواصل ألفية —
-    // هذا المكون غير مستخدم حالياً بأي شاشة (كل شاشة لها بطاقة منتج خاصة
-    // بها)، لكن تم توحيده مع formatPrice() في ScreenCommon.kt احتياطاً
-    // لأي استخدام مستقبلي، بدل ترك نسخة قديمة بلا فواصل ألفية بالكود.
-    formatPrice: (Any?) -> String = ::sharedFormatPrice
+    formatPrice: (Any?) -> String = ::sharedFormatPrice,
 ) {
-    val discount = product.discountPercent
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp), // rounded-xl
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), // bg-card
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Border), // border border-border
-    ) {
-        Column {
-            // ── صورة 1:1 ──
+    Column(modifier = modifier.clickable(onClick = onClick)) {
+        // ── صورة — نسبة عمودية (4:5) بزوايا دائرية واسعة ──
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(4f / 5f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Neutral100),
+        ) {
+            AsyncImage(
+                model = product.mainImage,
+                contentDescription = product.name,
+                contentScale = ContentScale.Crop,
+                placeholder = rememberVectorPainter(Icons.Filled.Image),
+                error = rememberVectorPainter(Icons.Filled.Image),
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            // زر مفضلة — دائرة بيضاء صغيرة أعلى الصورة
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant) // bg-secondary/20
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(30.dp)
+                    .background(Color.White.copy(alpha = 0.9f), CircleShape)
+                    .clickable(onClick = onFavoriteToggle),
+                contentAlignment = Alignment.Center,
             ) {
-                // ✅ إصلاح: صورة Placeholder صريحة أثناء التحميل وعند فشل جلب
-                // الصورة، بدل مربع فارغ صامت لا يوضّح للمستخدم إن كانت الصورة
-                // لا تزال تُحمَّل أو تعذّر تحميلها فعلاً.
-                AsyncImage(
-                    model = product.mainImage,
-                    contentDescription = product.name,
-                    contentScale = ContentScale.Crop,
-                    placeholder = rememberVectorPainter(Icons.Filled.Image),
-                    error = rememberVectorPainter(Icons.Filled.Image),
-                    modifier = Modifier.fillMaxSize()
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = null,
+                    tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.7f),
+                    modifier = Modifier.size(16.dp),
                 )
-                // شارة واحدة فقط: خصم، أو "مميز" إذا لا يوجد خصم — top-2 right-2
-                if (discount != null && discount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(Destructive, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = "-$discount%",
-                            color = Color.White,
-                            fontSize = 12.sp, // text-xs
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                } else if (product.isFeatured) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(Accent, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("مميز", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                // أيقونة المفضلة — أعلى يسار الصورة (top-2 left-2 في الموقع)
-                // ✅ إصلاح: القلب غير المفضَّل كان أبيض شفاف، فيختفي تماماً فوق
-                // صور المنتجات ذات الخلفية البيضاء/الفاتحة. أصبح الآن أسود شفافاً
-                // بدل الأبيض الشفاف، بلا أي خلفية إضافية خلف الأيقونة.
-                IconButton(
-                    onClick = onFavoriteToggle,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .size(32.dp),
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = null,
-                        tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.6f),
-                        modifier = Modifier.size(22.dp), // مطابق لـ w-5 h-5 مع تكبير طفيف
-                    )
-                }
-            }
-            // ── معلومات المنتج — p-3 ──
-            Column(modifier = Modifier.padding(12.dp)) {
-                // اسم المنتج — font-bold text-sm line-clamp-1 mb-1
-                Text(
-                    text = product.name,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(4.dp))
-                // السعر — items-baseline gap-1.5 mb-3
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = formatPrice(product.price),
-                        fontSize = 16.sp, // text-base
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Accent,
-                    )
-                    product.originalPrice?.let { orig ->
-                        if (orig > product.price) {
-                            Text(
-                                text = formatPrice(orig),
-                                fontSize = 12.sp, // text-xs
-                                color = MutedForeground,
-                                textDecoration = TextDecoration.LineThrough,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp)) // mb-3 قبل زر الإضافة للسلة
-                // ── زر إضافة للسلة — بعرض كامل، مطابق للموقع ──
-                Button(
-                    onClick = onAddToCart,
-                    modifier = Modifier.fillMaxWidth().height(32.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(12.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("إضافة للسلة", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
             }
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        // اسم المنتج — سطر واحد فقط
+        Text(
+            text = product.name,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        Spacer(Modifier.height(2.dp))
+
+        // السعر
+        Text(
+            text = formatPrice(product.price),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Accent,
+        )
     }
 }
 

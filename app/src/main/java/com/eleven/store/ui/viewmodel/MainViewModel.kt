@@ -18,6 +18,41 @@ class MainViewModel : ViewModel() {
 
     val repo = FirestoreRepository()
 
+    // ✅ جديد: ترتيب "متداخل" حسب الفئة بدل الاعتماد الحرفي على ترتيب
+    // Firestore (createdAt تنازلياً) — الذي كان يسبب ظهور عدة منتجات من نفس
+    // الفئة متتالية (مثلاً عدة عطور ثم الانتقال للمكياج) لأن المنتجات
+    // المضافة معاً زمنياً غالباً من نفس الفئة. الحل: تجميع المنتجات حسب
+    // categoryId (مع الحفاظ على ترتيبها الأصلي — أي الأحدث أولاً — داخل كل
+    // فئة)، ثم "توزيع دائري" Round-Robin بين الفئات بحيث لا يتكرر عنصران من
+    // نفس الفئة متتاليين إلا إذا لم يتبقَّ خيار آخر. هذا يحافظ على منطقية
+    // الترتيب (الأحدث أولاً ضمن كل فئة) بدل ترتيب عشوائي بالكامل.
+    private fun interleaveByCategory(products: List<Product>): List<Product> {
+        if (products.size <= 1) return products
+        val byCategory = LinkedHashMap<String, ArrayDeque<Product>>()
+        for (p in products) {
+            byCategory.getOrPut(p.categoryId) { ArrayDeque() }.add(p)
+        }
+        if (byCategory.size <= 1) return products
+        val queues = byCategory.values.toMutableList()
+        val result = ArrayList<Product>(products.size)
+        var lastIndex = -1
+        while (queues.any { it.isNotEmpty() }) {
+            var picked = false
+            for (step in queues.indices) {
+                val idx = (lastIndex + 1 + step) % queues.size
+                val queue = queues[idx]
+                if (queue.isNotEmpty()) {
+                    result.add(queue.removeFirst())
+                    lastIndex = idx
+                    picked = true
+                    break
+                }
+            }
+            if (!picked) break
+        }
+        return result
+    }
+
     // ─── Auth ───────────────────────────────────────────────────
     val currentUser = repo.observeAuthState().stateIn(
         viewModelScope, SharingStarted.Eagerly, repo.currentUser
@@ -594,10 +629,12 @@ class MainViewModel : ViewModel() {
                 val bestDeferred     = async { repo.getProducts(isBestSeller = true, limit = 10) }
                 val onSaleDeferred   = async { repo.getProducts(onSale       = true, limit = 10) }
                 // إخفاء المنتجات منتهية الكمية من جميع أقسام الصفحة الرئيسية
-                _featuredProducts.value = featuredDeferred.await().filter { it.stock > 0 }
-                _newArrivals.value      = newDeferred.await().filter { it.stock > 0 }
-                _bestSellers.value      = bestDeferred.await().filter { it.stock > 0 }
-                _onSaleProducts.value   = onSaleDeferred.await().filter { it.stock > 0 }
+                // ✅ + ترتيب متداخل حسب الفئة (انظر شرح interleaveByCategory) بدل
+                // ترتيب Firestore الخام (الأحدث فقط) الذي يجمّع فئة واحدة متتالية
+                _featuredProducts.value = interleaveByCategory(featuredDeferred.await().filter { it.stock > 0 })
+                _newArrivals.value      = interleaveByCategory(newDeferred.await().filter { it.stock > 0 })
+                _bestSellers.value      = interleaveByCategory(bestDeferred.await().filter { it.stock > 0 })
+                _onSaleProducts.value   = interleaveByCategory(onSaleDeferred.await().filter { it.stock > 0 })
             } catch (e: Exception) {
                 _homeProductsError.value = repo.friendlyLoadError(e)
             } finally {
@@ -626,15 +663,19 @@ class MainViewModel : ViewModel() {
             _hasMoreProducts.value = false
             try {
                 // إخفاء المنتجات منتهية الكمية من قائمة المنتجات
-                _allProducts.value = repo.getProducts(
-                    categoryId   = categoryId,
-                    isFeatured   = isFeatured,
-                    isNew        = isNew,
-                    isBestSeller = isBestSeller,
-                    onSale       = onSale,
-                    brandId      = brandId,
-                    searchQuery  = searchQuery,
-                ).filter { it.stock > 0 }
+                // ✅ + ترتيب متداخل حسب الفئة — نفس مبدأ الصفحة الرئيسية
+                // (بدون تأثير إن كان selectedCategory محدَّداً لفئة واحدة فقط)
+                _allProducts.value = interleaveByCategory(
+                    repo.getProducts(
+                        categoryId   = categoryId,
+                        isFeatured   = isFeatured,
+                        isNew        = isNew,
+                        isBestSeller = isBestSeller,
+                        onSale       = onSale,
+                        brandId      = brandId,
+                        searchQuery  = searchQuery,
+                    ).filter { it.stock > 0 }
+                )
                 _error.value = repo.lastProductsError
                 _hasMoreProducts.value = repo.lastProductsHasMore
             } catch (e: Exception) {
@@ -668,7 +709,11 @@ class MainViewModel : ViewModel() {
                     startAfter   = repo.lastProductsCursor,
                     algoliaPage  = repo.lastAlgoliaPage,
                 ).filter { it.stock > 0 }
-                _allProducts.value = _allProducts.value + nextPage
+                // ✅ نُداخل الصفحة الجديدة نفسها فقط قبل إلحاقها (بدل إعادة ترتيب
+                // القائمة كاملة، حتى لا تتحرك عناصر شاهدها المستخدم بالفعل أثناء
+                // التمرير) — قد يتجاور صنفان من نفس الفئة عند حد الصفحتين فقط،
+                // وهذا تنازل بسيط مقبول مقابل استقرار الشبكة أثناء التمرير
+                _allProducts.value = _allProducts.value + interleaveByCategory(nextPage)
                 _hasMoreProducts.value = repo.lastProductsHasMore
             } catch (e: Exception) {
                 // فشل تحميل صفحة إضافية لا يجب أن يمسح القائمة المعروضة أصلاً —

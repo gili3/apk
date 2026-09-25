@@ -41,9 +41,7 @@ import com.eleven.store.data.model.Banner
 import com.eleven.store.data.model.Brand
 import com.eleven.store.data.model.Category
 import com.eleven.store.data.model.Product
-import com.eleven.store.ui.components.ElevenSnackbarHost
-import com.eleven.store.ui.components.SnackbarType
-import com.eleven.store.ui.components.showMessage
+import com.eleven.store.ui.components.ProductCard
 import com.eleven.store.ui.theme.Accent
 import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
@@ -52,7 +50,6 @@ import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.theme.Neutral300
 import com.eleven.store.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
 //  HOME SCREEN — نسخة طبق الأصل من Home.tsx في الموقع
@@ -100,18 +97,6 @@ fun HomeScreen(
         featuredProducts.isNotEmpty() || newArrivals.isNotEmpty() ||
         bestSellers.isNotEmpty() || onSaleProducts.isNotEmpty()
     val allSectionsFailed = bannersError != null && categoriesError != null && homeProductsError != null
-
-    // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من بطاقات
-    // الرئيسية (بعكس ProductDetailScreen) — المستخدم يضغط الزر بلا أي
-    // تغذية راجعة تؤكد نجاح الإضافة فعلياً.
-    val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
-    fun confirmAddedToCart(product: Product) {
-        viewModel.addToCart(product)
-        coroutineScope.launch {
-            snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
@@ -183,12 +168,12 @@ fun HomeScreen(
             item { SectionErrorRetry(categoriesError!!) { viewModel.loadCategoriesAndBrands() } }
         }
 
-        // ── 2. التصنيفات — أول 4 فقط ────────────────────────────
+        // ── 2. التصنيفات — أول 5 فقط، بصف واحد ──────────────────
         if (categories.isNotEmpty()) {
             item {
                 HomeSectionHeader(title = "التصنيفات", onViewAll = onViewCategories)
                 CategoriesRow(
-                    categories = categories.take(4),
+                    categories = categories.take(5),
                     onCategoryClick = onCategoryClick,
                 )
             }
@@ -211,7 +196,6 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -225,7 +209,6 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -239,7 +222,6 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -253,7 +235,6 @@ fun HomeScreen(
                     favoriteIds = favoriteIds,
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
-                    onAddToCart = { confirmAddedToCart(it) },
                 )
             }
         }
@@ -266,14 +247,11 @@ fun HomeScreen(
                 // المنتجات بفلتر "brands" المجرَّد — نفس شاشة تصفّح واحدة
                 // لكل من التصنيفات والعلامات، بدل وجهتين مختلفتين لهما.
                 HomeSectionHeader(title = "العلامات التجارية", onViewAll = onViewCategories)
-                BrandsRow(brands = brands.take(3))
+                BrandsRow(brands = brands)
                 Spacer(Modifier.height(8.dp))
             }
         }
     }
-        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
-            ElevenSnackbarHost(snackbarHostState)
-        }
     }
 }
 
@@ -598,9 +576,11 @@ private fun CategoriesRow(
     categories: List<Category>,
     onCategoryClick: (String) -> Unit,
 ) {
+    // ✅ حجم/تباعد أضيق قليلاً (52dp بدل 56dp، تباعد 12dp بدل 16dp) ليتّسع
+    // صف واحد لـ5 تصنيفات على معظم الشاشات بأقل سحب أفقي ممكن
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(categories, key = { it.id }) { cat ->
             Column(
@@ -612,7 +592,7 @@ private fun CategoriesRow(
                 // w-14 h-14 rounded-full bg-secondary
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(52.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.secondary),
                     contentAlignment = Alignment.Center,
@@ -643,7 +623,7 @@ private fun CategoriesRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.width(64.dp),
+                    modifier = Modifier.width(60.dp),
                 )
             }
         }
@@ -653,8 +633,10 @@ private fun CategoriesRow(
 // ══════════════════════════════════════════════════════════════
 //  PRODUCT ROW
 //  - overflow-x-auto pb-2 px-4, flex gap-3
-//  - أول 3 منتجات فقط (slice 0,3)
-//  - عرض البطاقة 160dp
+//  - ✅ حتى 8 منتجات (بدل 3 سابقاً) مع سحب أفقي لعرض المزيد — الاكتفاء
+//    بـ3 كان يُخفي أغلب الـ10 منتجات المجلوبة أصلاً لكل قسم بلا داعٍ طالما
+//    أن السحب الأفقي متاح بالفعل بهذا الصف
+//  - عرض البطاقة 160dp — نفس بطاقة صفحة المنتجات (ProductCard الموحّدة)
 // ══════════════════════════════════════════════════════════════
 
 @Composable
@@ -663,191 +645,45 @@ private fun ProductRow(
     favoriteIds: Set<String>,
     onProductClick: (String) -> Unit,
     onFavoriteToggle: (String) -> Unit,
-    onAddToCart: (Product) -> Unit,
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(products.take(3), key = { it.id }) { product ->
-            HomeProductCard(
+        items(products.take(8), key = { it.id }) { product ->
+            ProductCard(
                 product = product,
                 isFavorite = product.id in favoriteIds,
                 onFavoriteToggle = { onFavoriteToggle(product.id) },
-                onAddToCart = { onAddToCart(product) },
                 onClick = { onProductClick(product.id) },
+                modifier = Modifier.width(160.dp),
             )
         }
     }
 }
 
 // ══════════════════════════════════════════════════════════════
-//  HOME PRODUCT CARD — مطابق ProductCard.tsx
-//  - rounded-xl border border-gray-100, shadow-sm
-//  - صورة 1:1 aspect-square
-//  - badge خصم أعلى يمين (top-2 right-2)
-//  - زر مفضلة أعلى يسار (top-2 left-2) — rounded-lg bg-white/80
-//  - معلومات المنتج: p-2.5 gap-1
-//  - السعر يسار + زر سلة يمين (w-9 h-9 rounded-lg bg-accent)
-// ══════════════════════════════════════════════════════════════
-
-@Composable
-private fun HomeProductCard(
-    product: Product,
-    isFavorite: Boolean,
-    onFavoriteToggle: () -> Unit,
-    onAddToCart: () -> Unit,
-    onClick: () -> Unit,
-) {
-    val discount = product.discountPercent
-    val imageSrc = product.mainImage
-    val outOfStock = product.stock <= 0
-
-    Card(
-        modifier = Modifier
-            .width(160.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = BorderStroke(1.dp, Border),
-    ) {
-        Column {
-            // ── صورة 1:1 ──────────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .background(Neutral100),
-            ) {
-                AsyncImage(
-                    model = imageSrc,
-                    contentDescription = product.name,
-                    contentScale = ContentScale.Crop,
-                    placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
-                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
-                    modifier = Modifier.fillMaxSize(),
-                )
-
-                // badge خصم — أعلى يمين (top-2 right-2)
-                if (discount != null && discount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(Destructive, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            "-$discount%",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-
-                // زر مفضلة — أعلى يسار (top-2 left-2) — موحّد مع ProductCard
-                // ✅ إصلاح: القلب غير المفضَّل أسود شفاف بدل الأبيض الشفاف (كان
-                // يختفي فوق صور المنتجات ذات الخلفية البيضاء/الفاتحة).
-                IconButton(
-                    onClick = onFavoriteToggle,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .size(32.dp),
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = null,
-                        tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.6f),
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            }
-
-            // ── معلومات المنتج — p-2.5 ──────────────────────────
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                // اسم المنتج — font-bold text-xs line-clamp-1
-                Text(
-                    text = product.name,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                // السعر + زر السلة — justify-between
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    // السعر — يسار
-                    Column {
-                        Text(
-                            text = formatPrice(product.price),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Accent,
-                        )
-                        if (discount != null && discount > 0 && product.originalPrice != null) {
-                            Text(
-                                text = formatPrice(product.originalPrice),
-                                fontSize = 12.sp,
-                                color = MutedForeground,
-                                textDecoration = TextDecoration.LineThrough,
-                            )
-                        }
-                    }
-
-                    // زر سلة — يمين: w-9 h-9 rounded-lg
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(
-                                if (outOfStock) MutedForeground.copy(alpha = 0.4f) else Accent,
-                                RoundedCornerShape(8.dp),
-                            )
-                            .clickable(enabled = !outOfStock, onClick = onAddToCart),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Filled.ShoppingCart,
-                            contentDescription = "أضف للسلة",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ══════════════════════════════════════════════════════════════
 //  BRANDS ROW
-//  - flex gap-3, w-24 h-24 rounded-xl border
+//  ✅ إعادة تصميم: 4 بطاقات فقط تملأ عرض الشاشة بالتساوي (weight بدل حجم
+//  ثابت + LazyRow قابل للسحب) — متجاورة ومقفلة بفراغ صغير موحّد (8dp) بدل
+//  الفراغات الكبيرة السابقة (12dp بين بطاقات 96dp ثابتة العرض)
 // ══════════════════════════════════════════════════════════════
 
 @Composable
 private fun BrandsRow(brands: List<Brand>) {
+    // ✅ إصلاح: Row العادي بالتصميم السابق كان يقصّ العلامات على أول 4 نهائياً
+    // (weight بيملأ العرض بالضبط بلا سحب) — أي علامة إضافية لا تظهر إطلاقاً
+    // ولا طريقة للوصول لها. رجعناها LazyRow قابلة للسحب، لكن بعرض بطاقة ثابت
+    // (80dp) يُحاكي "4 بطاقات تقريباً بالشاشة متجاورة بفراغ صغير" على معظم
+    // الهواتف، مع بقاء بقية العلامات (لو أكثر من 4) قابلة للوصول بالسحب.
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(brands, key = { it.id }) { brand ->
             Box(
                 modifier = Modifier
-                    .size(96.dp)
+                    .size(80.dp)
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                     .border(1.dp, Border, RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
@@ -860,14 +696,18 @@ private fun BrandsRow(brands: List<Brand>) {
                         error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(12.dp),
+                            .padding(10.dp),
                     )
                 } else {
                     Text(
                         brand.name,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MutedForeground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 4.dp),
                     )
                 }
             }

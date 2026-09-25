@@ -31,16 +31,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.eleven.store.data.model.Product
-import com.eleven.store.ui.components.ElevenSnackbarHost
-import com.eleven.store.ui.components.SnackbarType
-import com.eleven.store.ui.components.showMessage
+import com.eleven.store.ui.components.ProductCard
 import com.eleven.store.ui.theme.Accent
 import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
 import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.viewmodel.MainViewModel
-import kotlinx.coroutines.launch
 
 // ═══════════════════════════════════════════════════════════════
 //  PRODUCTS SCREEN — نسخة طبق الأصل من صفحة Products.tsx بالموقع
@@ -88,12 +85,6 @@ fun ProductsScreen(
         mutableStateOf(if (initialBrand.isNotBlank()) initialBrand else "all")
     }
     var searchQuery by rememberSaveable(initialSearch) { mutableStateOf(initialSearch) }
-
-    // ✅ إصلاح: لم تكن هناك أي رسالة تأكيد عند "إضافة للسلة" من هذه الشاشة
-    // (بعكس ProductDetailScreen) — المستخدم يضغط الزر بلا أي تغذية راجعة
-    // تؤكد نجاح الإضافة فعلياً.
-    val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
 
     // ✅ دالة إعادة تحميل موحّدة — تُستخدم في LaunchedEffect وأيضاً بزر
     // "إعادة المحاولة" عند فشل التحميل، بدل تكرار نفس المعاملات مرتين
@@ -448,7 +439,6 @@ fun ProductsScreen(
                 HorizontalDivider(color = Border, thickness = 1.dp)
             }
         },
-        snackbarHost = { ElevenSnackbarHost(snackbarHostState) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             when {
@@ -584,17 +574,12 @@ fun ProductsScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(products, key = { it.id }) { product ->
-                            ProductsScreenProductCard(
+                            ProductCard(
                                 product = product,
                                 isFavorite = product.id in favoriteIds,
                                 onFavoriteToggle = { viewModel.toggleFavorite(product.id) },
-                                onAddToCart = {
-                                    viewModel.addToCart(product)
-                                    coroutineScope.launch {
-                                        snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
-                                    }
-                                },
                                 onClick = { onProductClick(product.id) },
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                         if (isLoadingMoreProducts) {
@@ -614,187 +599,7 @@ fun ProductsScreen(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  PRODUCT CARD — نسخة طبق الأصل من Product Card في Products.tsx
-//  - rounded-xl border border-border
-//  - صورة 1:1 aspect-square مع hover scale
-//  - شارة خصم (أعلى يمين) + شارة مميز (أعلى يمين)
-//  - اسم المنتج: font-bold text-sm line-clamp-1
-//  - السعر: text-base font-extrabold text-accent + السعر الأصلي
-//  - زر إضافة للسلة + زر مفضلة (ظاهرين دائماً)
-// ═══════════════════════════════════════════════════════════════
-
-@Composable
-private fun ProductsScreenProductCard(
-    product: Product,
-    isFavorite: Boolean,
-    onFavoriteToggle: () -> Unit,
-    onAddToCart: () -> Unit,
-    onClick: () -> Unit,
-) {
-    val discount = product.discountPercent
-    val imageSrc = product.mainImage
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-    ) {
-        Column {
-            // ── صورة 1:1 ──────────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .background(Neutral100),
-            ) {
-                AsyncImage(
-                    model = imageSrc,
-                    contentDescription = product.name,
-                    contentScale = ContentScale.Crop,
-                    placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
-                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
-                    modifier = Modifier.fillMaxSize(),
-                )
-
-                // شارة الخصم — أعلى يمين
-                if (discount != null && discount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(Destructive, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            "-$discount%",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-
-                // شارة "مميز" — أعلى يمين (إذا كان مميز ولا يوجد خصم)
-                if (product.isFeatured && (discount == null || discount <= 0)) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(Accent, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            "مميز",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-
-            // ── معلومات المنتج — p-3 ──────────────────────────
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                // اسم المنتج — font-bold text-sm line-clamp-1
-                Text(
-                    text = product.name,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                // السعر
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = formatPrice(product.price),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Accent,
-                    )
-                    if (discount != null && discount > 0 && product.originalPrice != null) {
-                        Text(
-                            text = formatNumber(product.originalPrice),
-                            fontSize = 12.sp,
-                            color = MutedForeground,
-                            textDecoration = TextDecoration.LineThrough,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                // أزرار: إضافة للسلة + مفضلة
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    // زر إضافة للسلة
-                    Button(
-                        onClick = onAddToCart,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Accent,
-                            contentColor = Color.White,
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(32.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.ShoppingCart,
-                            contentDescription = null,
-                            modifier = Modifier.size(12.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "إضافة للسلة",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-
-                    // زر المفضلة
-                    OutlinedButton(
-                        onClick = onFavoriteToggle,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        modifier = Modifier.size(32.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color.Transparent,
-                        ),
-                    ) {
-                        Icon(
-                            imageVector = if (isFavorite) Icons.Filled.Favorite
-                            else Icons.Filled.FavoriteBorder,
-                            contentDescription = null,
-                            tint = if (isFavorite) Destructive
-                            else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ملاحظة: formatPrice/formatNumber مُعرّفتان بشكل مشترك في ScreenCommon.kt
+// ملاحظة: بطاقة المنتج الآن مكوّن موحّد واحد (ProductCard في Components.kt)
+// يُستخدم هنا وبالصفحة الرئيسية معاً بنفس الشكل والحجم والمحتوى، بدل
+// نسخة منفصلة لكل شاشة كما كان سابقاً.
+// formatPrice/formatNumber مُعرّفتان بشكل مشترك في ScreenCommon.kt

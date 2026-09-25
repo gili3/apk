@@ -725,6 +725,7 @@ private fun PreferencesSection(
     pushEnabled: Boolean,
     onPushChange: (Boolean) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     SettingsCard {
         SettingsSwitchRow(
             icon = Icons.Filled.Notifications,
@@ -733,6 +734,70 @@ private fun PreferencesSection(
             checked = pushEnabled,
             onCheckedChange = onPushChange,
         )
+        HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 16.dp))
+        // ✅ جديد: خيار يدوي لوضع العرض (نظام/فاتح/داكن) — قبل هذا كان
+        // التطبيق يتبع وضع النظام فقط بلا أي تحكم من المستخدم.
+        SettingsThemeRow(
+            mode = com.eleven.store.util.ThemePrefs.current,
+            onModeChange = { com.eleven.store.util.ThemePrefs.setMode(context, it) },
+        )
+    }
+}
+
+/** صف اختيار وضع العرض: نظام / فاتح / داكن — عبر ثلاث شرائح (Chips). */
+@Composable
+private fun SettingsThemeRow(
+    mode: com.eleven.store.util.ThemeMode,
+    onModeChange: (com.eleven.store.util.ThemeMode) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Filled.DarkMode, null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(20.dp))
+            Text(
+                "مظهر التطبيق",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val options = listOf(
+                com.eleven.store.util.ThemeMode.SYSTEM to "تلقائي",
+                com.eleven.store.util.ThemeMode.LIGHT to "فاتح",
+                com.eleven.store.util.ThemeMode.DARK to "داكن",
+            )
+            options.forEach { (optionMode, optionLabel) ->
+                val selected = mode == optionMode
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (selected) Accent else MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { onModeChange(optionMode) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        optionLabel,
+                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) AccentForeground else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

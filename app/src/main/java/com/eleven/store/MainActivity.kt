@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -87,12 +88,31 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.eleven.store.util.ThemePrefs.init(this)
         requestNotificationPermissionIfNeeded()
         pendingNotificationRoute.value = intent?.getStringExtra(NOTIFICATION_ROUTE_EXTRA)
         enableEdgeToEdge()
         setContent {
+            // ✅ رُفع إنشاء الـViewModel إلى هنا (فوق ElevenStoreTheme) حتى تصل
+            // إعدادات المتجر (ومنها ألوان لوحة التحكم) إلى الثيم نفسه؛ viewModel()
+            // بنفس الـActivity يُرجع نفس النسخة عند استدعائه لاحقاً داخل ElevenApp.
+            val viewModel: MainViewModel = viewModel()
+            val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
+
+            val themeMode = com.eleven.store.util.ThemePrefs.current
+            val darkTheme = when (themeMode) {
+                com.eleven.store.util.ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                com.eleven.store.util.ThemeMode.LIGHT -> false
+                com.eleven.store.util.ThemeMode.DARK -> true
+            }
+
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                ElevenStoreTheme {
+                ElevenStoreTheme(
+                    darkTheme = darkTheme,
+                    primaryColor = storeSettings.primaryColor,
+                    secondaryColor = storeSettings.secondaryColor,
+                    backgroundColor = storeSettings.backgroundColor,
+                ) {
                     ElevenApp(
                         pendingRoute = pendingNotificationRoute.value,
                         onPendingRouteConsumed = { pendingNotificationRoute.value = null },

@@ -193,6 +193,12 @@ data class StoreSettings(
     val storeVision: String = "",
     val storeMission: String = "",
     val storeAboutImage: String = "",
+    // ✅ ألوان قابلة للتخصيص من لوحة التحكم (تبويب "المظهر" في الإعدادات) —
+    // قيمة فارغة "" تعني: لا تخصيص، استخدم لون التصميم الافتراضي في Theme.kt.
+    // راجع ElevenStoreTheme في ui/theme/Theme.kt لكيفية تطبيقها.
+    val primaryColor: String = "",
+    val secondaryColor: String = "",
+    val backgroundColor: String = "",
 ) {
     // اسم متوافق مع الكود القديم في الشاشات (checkout كان يستخدم freeShippingMinOrder)
     val freeShippingMinOrder: Double get() = freeShippingThreshold

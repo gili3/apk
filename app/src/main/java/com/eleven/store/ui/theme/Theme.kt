@@ -284,12 +284,57 @@ val ElevenTypography = androidx.compose.material3.Typography(
 //  THEME COMPOSABLE
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+//  ألوان قابلة للتخصيص من لوحة التحكم (settings/store في Firestore)
+//  راجع: data/model/Models.kt::StoreSettings.primaryColor/secondaryColor/backgroundColor
+// ═══════════════════════════════════════════════════════════════
+
+/** يحوّل نص Hex مثل "#0F172A" إلى Color، أو null إن كان فارغاً/غير صالح
+ *  (بدل تعطّل التطبيق بقيمة أدخلها الأدمن بالخطأ في لوحة التحكم). */
+fun String.toColorOrNull(): Color? {
+    if (this.isBlank()) return null
+    return try {
+        val hex = if (this.startsWith("#")) this else "#$this"
+        if (!Regex("^#[0-9A-Fa-f]{6}$").matches(hex)) return null
+        Color(android.graphics.Color.parseColor(hex))
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** أبيض أو الحبر الأساسي فوق أي لون خلفية — حسب السطوع النسبي (WCAG) —
+ *  حتى يبقى النص مقروءاً مهما كان اللون الذي يختاره الأدمن. */
+private fun contrastingOnColor(bg: Color): Color {
+    val luminance = 0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue
+    return if (luminance > 0.6) Ink else PureWhite
+}
+
 @Composable
 fun ElevenStoreTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    primaryColor: String = "",
+    secondaryColor: String = "",
+    backgroundColor: String = "",
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val base = if (darkTheme) DarkColorScheme else LightColorScheme
+
+    val primaryOverride = primaryColor.toColorOrNull()
+    val secondaryOverride = secondaryColor.toColorOrNull()
+    // لون الخلفية المخصَّص يُطبَّق فقط بالوضع الفاتح — بالوضع الداكن نُبقي
+    // خلفية داكنة دائماً حفاظاً على وضوح النصوص فوقها بغض النظر عن اختيار الأدمن.
+    val backgroundOverride = if (!darkTheme) backgroundColor.toColorOrNull() else null
+
+    val colorScheme = base.copy(
+        primary = primaryOverride ?: base.primary,
+        onPrimary = primaryOverride?.let(::contrastingOnColor) ?: base.onPrimary,
+        secondary = secondaryOverride ?: base.secondary,
+        onSecondary = secondaryOverride?.let(::contrastingOnColor) ?: base.onSecondary,
+        background = backgroundOverride ?: base.background,
+        onBackground = backgroundOverride?.let(::contrastingOnColor) ?: base.onBackground,
+        surface = backgroundOverride ?: base.surface,
+        onSurface = backgroundOverride?.let(::contrastingOnColor) ?: base.onSurface,
+    )
 
     CompositionLocalProvider(
         LocalSpacing provides ElevenSpacing()

@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,6 +32,7 @@ import com.eleven.store.ui.theme.Destructive
 import com.eleven.store.ui.theme.DestructiveBg
 import com.eleven.store.ui.theme.Info
 import com.eleven.store.ui.theme.InfoBg
+import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.theme.Neutral100
 import com.eleven.store.ui.theme.Neutral200
 import com.eleven.store.ui.theme.OrderStatusColors
@@ -42,10 +44,21 @@ import com.eleven.store.ui.theme.Warning
 import com.eleven.store.ui.theme.WarningBg
 
 // ═══════════════════════════════════════════════════════════════
-//  PRODUCT CARD — تصميم مبسّط (صورة + اسم + سعر + مفضلة فقط)
-//  - بدون حدود/ظل حول البطاقة، زوايا دائرية واسعة، صورة بنسبة عمودية
-//  - بدون زر "إضافة للسلة" وبدون شارات خصم/مميز فوق البطاقة — الإضافة
-//    للسلة وتفاصيل العرض تظهر بصفحة المنتج بعد الضغط على البطاقة
+//  PRODUCT CARD — تصميم مبسّط (صورة مربّعة + اسم + سعر + مفضلة)
+//  - صورة 1:1 مربّعة تماماً (بدل النسبة العمودية السابقة) — هي نفسها
+//    السبب الرئيسي في تقصير البطاقة، فالنسبة العمودية كانت تصنع صورة
+//    أطول من المربّع (4:5 = ارتفاع 1.25× العرض)
+//  - بدون حدود/ظل حول البطاقة، مسافات وخطوط مضغوطة قدر الإمكان بلا
+//    ازدحام، زوايا دائرية على الصورة فقط
+//  - زر المفضلة دائرة بيضاء أعلى يمين البطاقة فعلياً — ملاحظة مهمة:
+//    التطبيق بالكامل يفرض RTL عبر LocalLayoutDirection في MainActivity،
+//    فـ Alignment.TopStart هو من يُصبح "أعلى يمين" بصرياً هنا (وليس
+//    TopEnd كما قد يُظن للوهلة الأولى) — هذا كان سبب ظهور القلب بمكان
+//    خاطئ بالنسخة السابقة.
+//  - بدون زر "إضافة للسلة" — يظهر فقط بصفحة المنتج
+//  - عند وجود خصم أو كون المنتج مميزاً: شارة صغيرة أعلى يسار البطاقة
+//    (الجهة المقابلة للقلب) + السعر الأصلي مشطوب بجانب السعر الحالي عند
+//    الخصم — إشارة واضحة لكنها لا تُثقل البطاقة أو تُعيد الازدحام
 //  - العرض يُحدَّد من الخارج عبر modifier (fillMaxWidth بالشبكة،
 //    width(160.dp) بصف الرئيسية الأفقي) ليبقى الشكل والمحتوى متطابقين
 //    تماماً بين الشاشتين
@@ -58,13 +71,16 @@ fun ProductCard(
     modifier: Modifier = Modifier,
     formatPrice: (Any?) -> String = ::sharedFormatPrice,
 ) {
+    val discount = product.discountPercent
+    val isOnSale = discount != null && discount > 0
+
     Column(modifier = modifier.clickable(onClick = onClick)) {
-        // ── صورة — نسبة عمودية (4:5) بزوايا دائرية واسعة ──
+        // ── صورة مربّعة 1:1 ──
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(4f / 5f)
-                .clip(RoundedCornerShape(18.dp))
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(16.dp))
                 .background(Neutral100),
         ) {
             AsyncImage(
@@ -76,13 +92,37 @@ fun ProductCard(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // زر مفضلة — دائرة بيضاء صغيرة أعلى الصورة
+            // شارة خصم/مميز — الجهة المقابلة للقلب (TopEnd هنا = أعلى يسار
+            // فعلياً بسبب فرض RTL بكامل التطبيق، راجع ملاحظة القلب أدناه)
+            if (isOnSale) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .background(Destructive, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                ) {
+                    Text("-$discount%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (product.isFeatured) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .background(Accent, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                ) {
+                    Text("مميز", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // زر مفضلة — دائرة بيضاء أعلى يمين البطاقة (راجع ملاحظة RTL أعلاه)
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(30.dp)
-                    .background(Color.White.copy(alpha = 0.9f), CircleShape)
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(26.dp)
+                    .background(Color.White.copy(alpha = 0.92f), CircleShape)
                     .clickable(onClick = onFavoriteToggle),
                 contentAlignment = Alignment.Center,
             ) {
@@ -90,32 +130,41 @@ fun ProductCard(
                     imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                     contentDescription = null,
                     tint = if (isFavorite) Destructive else Color.Black.copy(alpha = 0.7f),
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(14.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
 
         // اسم المنتج — سطر واحد فقط
         Text(
             text = product.name,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
 
-        Spacer(Modifier.height(2.dp))
-
-        // السعر
-        Text(
-            text = formatPrice(product.price),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = Accent,
-        )
+        // السعر — مباشرة تحت الاسم بلا فراغ زائد، مع السعر الأصلي مشطوباً
+        // بجانبه عند وجود خصم
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                text = formatPrice(product.price),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = Accent,
+            )
+            if (isOnSale && product.originalPrice != null) {
+                Text(
+                    text = formatPrice(product.originalPrice),
+                    fontSize = 11.sp,
+                    color = MutedForeground,
+                    textDecoration = TextDecoration.LineThrough,
+                )
+            }
+        }
     }
 }
 

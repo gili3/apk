@@ -150,7 +150,7 @@ fun HomeScreen(
     val allSectionsFailed = bannersError != null && categoriesError != null && homeProductsError != null
 
     // مجموعة الأقسام اللي ظهرت مرة بالفعل — راجع الشرح بأعلى SectionReveal
-    val revealed = remember { mutableStateSetOf<Int>() }
+    val revealed = remember { mutableSetOf<Int>() }
 
     Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(

@@ -73,11 +73,27 @@ import kotlinx.coroutines.delay
 //  الأقسام السفلية كثيراً لو المستخدم مرّر لأسفل بسرعة.
 // ══════════════════════════════════════════════════════════════
 @Composable
-private fun SectionReveal(index: Int, content: @Composable () -> Unit) {
+private fun SectionReveal(index: Int, revealed: MutableSet<Int>, content: @Composable () -> Unit) {
+    // ✅ إصلاح (كان سبب تداخل النص مع البطاقات + بطء ملحوظ بالتنقل/السحب):
+    // 1) AnimatedVisibility بيحتاج حاوية صريحة (Column) لعناصره الفرعية —
+    //    بدونها، أكتر من composable شقيق (العنوان + الصف) كانا يُوضَعان فوق
+    //    بعضهما بنفس النقطة بدل ترتيبهما رأسياً، فيبدو النص متداخلاً مع
+    //    البطاقات. 2) عناصر LazyColumn تُعاد تركيبها من الصفر كل مرة تدخل/
+    //    تخرج من نطاق الشاشة أثناء السحب — فبدون تتبّع "ظهر قبل كده"، كانت
+    //    حركة fade+slide (والـLaunchedEffect بتاعها) تُعاد من الصفر مع كل
+    //    سحب لأعلى/أسفل حتى بعد اكتمال التحميل، وهو تحديداً سبب "ثقل
+    //    التنقل حتى بعد تحميل كل العناصر". الحل: مجموعة `revealed` مُعرَّفة
+    //    فوق LazyColumn (تعيش طول عمر HomeScreen نفسها، لا تُعاد كل قسم
+    //    lazy) — أي قسم ظهر مرة، يُعرض بعدها فوراً بلا أي غلاف حركة إطلاقاً.
+    if (index in revealed) {
+        Column { content() }
+        return
+    }
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay((index * 60L).coerceAtMost(240L))
         visible = true
+        revealed += index
     }
     AnimatedVisibility(
         visible = visible,
@@ -86,7 +102,7 @@ private fun SectionReveal(index: Int, content: @Composable () -> Unit) {
             initialOffsetY = { it / 8 },
         ),
     ) {
-        content()
+        Column { content() }
     }
 }
 
@@ -132,6 +148,9 @@ fun HomeScreen(
         featuredProducts.isNotEmpty() || newArrivals.isNotEmpty() ||
         bestSellers.isNotEmpty() || onSaleProducts.isNotEmpty()
     val allSectionsFailed = bannersError != null && categoriesError != null && homeProductsError != null
+
+    // مجموعة الأقسام اللي ظهرت مرة بالفعل — راجع الشرح بأعلى SectionReveal
+    val revealed = remember { mutableStateSetOf<Int>() }
 
     Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
@@ -186,7 +205,7 @@ fun HomeScreen(
 
         // ── 1. Banner Slider — mx-4 mt-3 rounded-2xl h-200 ──────
         item {
-            SectionReveal(index = 0) {
+            SectionReveal(index = 0, revealed = revealed) {
             BannerSlider(
                 banners = banners,
                 isLoading = bannersLoading,
@@ -210,7 +229,7 @@ fun HomeScreen(
         // حتى لا "تقفز" الصفحة لأعلى/أسفل لحظة استبدال الهيكل بالمحتوى.
         if (categoriesLoading && categories.isEmpty()) {
             item {
-                SectionReveal(index = 1) {
+                SectionReveal(index = 1, revealed = revealed) {
                     HomeSectionHeaderSkeleton()
                     CategoriesRowSkeleton()
                 }
@@ -220,7 +239,7 @@ fun HomeScreen(
         // ── 2. التصنيفات — أول 5 فقط، بصف واحد ──────────────────
         if (categories.isNotEmpty()) {
             item {
-                SectionReveal(index = 1) {
+                SectionReveal(index = 1, revealed = revealed) {
                 HomeSectionHeader(title = "التصنيفات", onViewAll = onViewCategories)
                 CategoriesRow(
                     categories = categories.take(5),
@@ -246,13 +265,13 @@ fun HomeScreen(
             bestSellers.isEmpty() && newArrivals.isEmpty()
         ) {
             item {
-                SectionReveal(index = 2) {
+                SectionReveal(index = 2, revealed = revealed) {
                     HomeSectionHeaderSkeleton()
                     ProductRowSkeleton()
                 }
             }
             item {
-                SectionReveal(index = 3) {
+                SectionReveal(index = 3, revealed = revealed) {
                     HomeSectionHeaderSkeleton()
                     ProductRowSkeleton()
                 }
@@ -262,7 +281,7 @@ fun HomeScreen(
         // ── 3. العروض والخصومات ─────────────────────────────────
         if (onSaleProducts.isNotEmpty()) {
             item {
-                SectionReveal(index = 2) {
+                SectionReveal(index = 2, revealed = revealed) {
                 HomeSectionHeader(title = "العروض والخصومات", onViewAll = { onViewAllClick("onSale") })
                 ProductRow(
                     products = onSaleProducts,
@@ -277,7 +296,7 @@ fun HomeScreen(
         // ── 4. المنتجات المميزة ──────────────────────────────────
         if (featuredProducts.isNotEmpty()) {
             item {
-                SectionReveal(index = 3) {
+                SectionReveal(index = 3, revealed = revealed) {
                 HomeSectionHeader(title = "المنتجات المميزة", onViewAll = { onViewAllClick("featured") })
                 ProductRow(
                     products = featuredProducts,
@@ -292,7 +311,7 @@ fun HomeScreen(
         // ── 5. الأكثر مبيعاً ────────────────────────────────────
         if (bestSellers.isNotEmpty()) {
             item {
-                SectionReveal(index = 4) {
+                SectionReveal(index = 4, revealed = revealed) {
                 HomeSectionHeader(title = "الأكثر مبيعاً", onViewAll = { onViewAllClick("bestSeller") })
                 ProductRow(
                     products = bestSellers,
@@ -307,7 +326,7 @@ fun HomeScreen(
         // ── 6. المنتجات الجديدة ──────────────────────────────────
         if (newArrivals.isNotEmpty()) {
             item {
-                SectionReveal(index = 5) {
+                SectionReveal(index = 5, revealed = revealed) {
                 HomeSectionHeader(title = "المنتجات الجديدة", onViewAll = { onViewAllClick("new") })
                 ProductRow(
                     products = newArrivals,
@@ -322,7 +341,7 @@ fun HomeScreen(
         // ── 7. العلامات التجارية ─────────────────────────────────
         if (brands.isNotEmpty()) {
             item {
-                SectionReveal(index = 6) {
+                SectionReveal(index = 6, revealed = revealed) {
                 // ✅ "عرض المزيد" هنا يفتح نفس شاشة التصنيفات/العلامات
                 // التجارية الجديدة (مباشرة على قسم العلامات) بدل صفحة
                 // المنتجات بفلتر "brands" المجرَّد — نفس شاشة تصفّح واحدة

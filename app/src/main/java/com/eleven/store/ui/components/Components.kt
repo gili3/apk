@@ -1,6 +1,12 @@
 package com.eleven.store.ui.components
 
 import com.eleven.store.ui.screens.formatPrice as sharedFormatPrice
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +19,8 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -262,11 +270,33 @@ fun OrderStatusBadge(status: com.eleven.store.data.model.OrderStatus) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  SKELETON PULSE — نبضة شفافية موحّدة لكل حالات التحميل بالتطبيق
+//  (بديل أنيق لدوّارة تحميل مجرّدة فوق خلفية ثابتة). مستخدمة هنا
+//  وبـ BannerSlider (HomeScreen.kt) وNotificationSkeletonCard.
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+fun rememberInfiniteTransitionAlpha(): State<Float> {
+    val transition = rememberInfiniteTransition(label = "skeleton")
+    return transition.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "skeletonAlpha",
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  PRODUCT CARD SKELETON
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun ProductCardSkeleton(modifier: Modifier = Modifier) {
+    val alpha by rememberInfiniteTransitionAlpha()
+    val tone = Neutral200.copy(alpha = alpha)
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -277,18 +307,16 @@ fun ProductCardSkeleton(modifier: Modifier = Modifier) {
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .background(
-                        Brush.linearGradient(listOf(Neutral200, Neutral100, Neutral200))
-                    )
+                    .background(tone)
             )
             Column(Modifier.padding(12.dp)) {
-                Box(Modifier.fillMaxWidth(0.8f).height(12.dp).background(Neutral200, RoundedCornerShape(4.dp)))
+                Box(Modifier.fillMaxWidth(0.8f).height(12.dp).background(tone, RoundedCornerShape(4.dp)))
                 Spacer(Modifier.height(8.dp))
-                Box(Modifier.fillMaxWidth(0.4f).height(14.dp).background(Neutral200, RoundedCornerShape(4.dp)))
+                Box(Modifier.fillMaxWidth(0.4f).height(14.dp).background(tone, RoundedCornerShape(4.dp)))
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.weight(1f).height(32.dp).background(Neutral200, RoundedCornerShape(8.dp)))
-                    Box(Modifier.width(32.dp).height(32.dp).background(Neutral200, RoundedCornerShape(8.dp)))
+                    Box(Modifier.weight(1f).height(32.dp).background(tone, RoundedCornerShape(8.dp)))
+                    Box(Modifier.width(32.dp).height(32.dp).background(tone, RoundedCornerShape(8.dp)))
                 }
             }
         }

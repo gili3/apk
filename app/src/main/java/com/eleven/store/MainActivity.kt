@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
@@ -15,6 +16,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,10 +59,15 @@ import com.eleven.store.navigation.BottomNavItem
 import com.eleven.store.navigation.ElevenNavGraph
 import com.eleven.store.navigation.Route
 import com.eleven.store.ui.icons.LucideIcons
+import com.eleven.store.ui.screens.AppWelcomeOverlay
 import com.eleven.store.ui.theme.*
 import com.eleven.store.ui.viewmodel.MainViewModel
 import com.eleven.store.util.NoInternetBanner
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
 
@@ -86,7 +93,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ✅ جديد: يُبقي شاشة إقلاع النظام (Theme.ElevenStore.Starting) ظاهرة حتى
+    // أول رسمة فعلية لواجهة Compose — بدل اختفائها فوراً ثم وماضة بيضاء
+    // فارغة لحظية قبل أن يُقلع Compose. يُقلَب مرة واحدة فقط (SideEffect
+    // بأول composition لـElevenApp أدناه)، وليس مرتبطاً بتحميل البيانات
+    // (ذلك تحديداً دور شاشة الترحيب AppWelcomeOverlay داخل ElevenApp —
+    // فصل الاثنين مقصود: شاشة النظام يجب أن تكون قصيرة جداً بينما شاشة
+    // الترحيب هي من تمتص وقت أول تحميل فعلي للبيانات).
+    private var contentDrawn = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
+        splashScreen.setKeepOnScreenCondition { !contentDrawn }
         super.onCreate(savedInstanceState)
         com.eleven.store.util.ThemePrefs.init(this)
         requestNotificationPermissionIfNeeded()
@@ -113,6 +131,10 @@ class MainActivity : ComponentActivity() {
                     secondaryColor = storeSettings.secondaryColor,
                     backgroundColor = storeSettings.backgroundColor,
                 ) {
+                    // أول رسمة فعلية للواجهة ← نُخفي شاشة إقلاع النظام الآن
+                    // (شاشة الترحيب AppWelcomeOverlay بداخل ElevenApp هي من
+                    // تتكفّل بامتصاص وقت تحميل البيانات الفعلي من هنا فصاعداً).
+                    SideEffect { contentDrawn = true }
                     ElevenApp(
                         pendingRoute = pendingNotificationRoute.value,
                         onPendingRouteConsumed = { pendingNotificationRoute.value = null },
@@ -149,6 +171,26 @@ fun ElevenApp(
     val cartCount by viewModel.cartCount.collectAsStateWithLifecycle()
     val user by viewModel.currentUser.collectAsStateWithLifecycle()
     val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
+
+    // ✅ جديد: شاشة الترحيب (AppWelcomeOverlay) — تبقى فوق كامل التطبيق طوال
+    // أول تحميل فعلي لبيانات الرئيسية فقط، ثم تختفي نهائياً (remember بلا
+    // مفتاح = مرتبطة بعمر ElevenApp/الـActivity، لا تُعاد عند كل عودة لتبويب
+    // الرئيسية). حد أدنى 900ms (حتى لو كانت البيانات بكاش محلي وجاهزة فوراً
+    // — عرض ومضة بلا معنى أسوأ من عدم إظهارها إطلاقاً)، وحد أقصى أمان 3.5s
+    // (حتى لا يظل المستخدم حبيس شاشة الترحيب لو تأخر الاتصال فعلياً؛ تكمل
+    // شاشة الرئيسية عندها التحميل بنفسها بحالاتها التدريجية المعتادة).
+    val bannersLoading by viewModel.bannersLoading.collectAsStateWithLifecycle()
+    val categoriesLoading by viewModel.categoriesLoading.collectAsStateWithLifecycle()
+    val homeProductsLoading by viewModel.homeProductsLoading.collectAsStateWithLifecycle()
+    val isHomeDataLoading = bannersLoading || categoriesLoading || homeProductsLoading
+    var showWelcome by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(900)
+        withTimeoutOrNull(3500) {
+            snapshotFlow { isHomeDataLoading }.first { loading -> !loading }
+        }
+        showWelcome = false
+    }
 
     // فتح المسار المطلوب من إشعار تم الضغط عليه (order/{id} أو notifications
     // مثلاً) — يعمل سواء كان التطبيق مغلقاً (أول إطلاق) أو مفتوحاً أصلاً
@@ -188,6 +230,7 @@ fun ElevenApp(
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -246,6 +289,14 @@ fun ElevenApp(
                 }
             }
         }
+    }
+
+    AnimatedVisibility(
+        visible = showWelcome,
+        exit = fadeOut(tween(450)),
+    ) {
+        AppWelcomeOverlay()
+    }
     }
 }
 

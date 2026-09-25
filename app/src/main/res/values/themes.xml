@@ -14,4 +14,20 @@
         <item name="android:textColorPrimary">@color/foreground</item>
         <item name="android:colorAccent">@color/primary</item>
     </style>
+
+    <!--
+      ✅ جديد: ثيم شاشة الإقلاع (Android 12+ Splash Screen API).
+      هذا هو أول شيء يظهر فعلياً لحظة الضغط على أيقونة التطبيق — قبل حتى
+      تهيئة النشاط/Compose — فيحلّ محل "الوماضة البيضاء الفارغة" التي كانت
+      تظهر خلال هذه اللحظة (تحديداً ما يعنيه طلب "تقليل الإحساس بالانتظار").
+      يُستخدم فقط على MainActivity (شاشة الإقلاع)، وتتم إعادة الثيم تلقائياً
+      لـTheme.ElevenStore بعد أول رسمة عبر postSplashScreenTheme أدناه؛
+      المنطق الفعلي لمتى تُخفى (وربط ذلك بشاشة الترحيب داخل Compose) موجود
+      بـMainActivity.kt (installSplashScreen + setKeepOnScreenCondition).
+    -->
+    <style name="Theme.ElevenStore.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.ElevenStore</item>
+    </style>
 </resources>

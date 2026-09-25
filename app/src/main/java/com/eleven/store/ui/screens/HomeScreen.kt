@@ -1,5 +1,9 @@
 package com.eleven.store.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,18 +46,49 @@ import com.eleven.store.data.model.Brand
 import com.eleven.store.data.model.Category
 import com.eleven.store.data.model.Product
 import com.eleven.store.ui.components.ProductCard
+import com.eleven.store.ui.components.ProductCardSkeleton
+import com.eleven.store.ui.components.rememberInfiniteTransitionAlpha
 import com.eleven.store.ui.theme.Accent
 import com.eleven.store.ui.theme.Border
 import com.eleven.store.ui.theme.Destructive
+import com.eleven.store.ui.theme.Ink
 import com.eleven.store.ui.theme.MutedForeground
 import com.eleven.store.ui.theme.Neutral100
-import com.eleven.store.ui.theme.Neutral300
+import com.eleven.store.ui.theme.Neutral200
 import com.eleven.store.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
 
 // ═══════════════════════════════════════════════════════════════
 //  HOME SCREEN — نسخة طبق الأصل من Home.tsx في الموقع
 // ═══════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════
+//  SECTION REVEAL
+//  ✅ جديد: ظهور تدريجي (fade + slide من الأسفل قليلاً) لكل قسم بالصفحة
+//  الرئيسية بدل ظهورها فجأة كلها دفعة واحدة — خصوصاً مباشرة بعد اختفاء
+//  شاشة الترحيب (AppWelcomeOverlay بـMainActivity.kt)، فالانتقال يبان
+//  متتابعاً ومقصوداً بدل "قفزة" واحدة من شاشة الترحيب لمحتوى كامل جامد.
+//  تأخير بسيط متدرّج حسب ترتيب القسم (index) — أول قسم (البانر) يظهر شبه
+//  فوري، وكل قسم بعده بفارق 60ms تقريباً، بحد أقصى معقول حتى لا تتأخر
+//  الأقسام السفلية كثيراً لو المستخدم مرّر لأسفل بسرعة.
+// ══════════════════════════════════════════════════════════════
+@Composable
+private fun SectionReveal(index: Int, content: @Composable () -> Unit) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay((index * 60L).coerceAtMost(240L))
+        visible = true
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(350)) + slideInVertically(
+            animationSpec = tween(350),
+            initialOffsetY = { it / 8 },
+        ),
+    ) {
+        content()
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -151,6 +186,7 @@ fun HomeScreen(
 
         // ── 1. Banner Slider — mx-4 mt-3 rounded-2xl h-200 ──────
         item {
+            SectionReveal(index = 0) {
             BannerSlider(
                 banners = banners,
                 isLoading = bannersLoading,
@@ -161,6 +197,7 @@ fun HomeScreen(
                 // لا يفتح". الآن: رابط محدَّد → onOpenLink، وإلا → onShopClick.
                 onBannerLinkClick = { link -> onOpenLink(link) },
             )
+            }
         }
 
         // ── فشل جزئي: تصنيفات/علامات فقط (باقي الصفحة تعمل بشكل طبيعي) ──
@@ -168,14 +205,28 @@ fun HomeScreen(
             item { SectionErrorRetry(categoriesError!!) { viewModel.loadCategoriesAndBrands() } }
         }
 
+        // ── هيكل تحميل مؤقت للتصنيفات (بدل عدم ظهور القسم إطلاقاً لحد
+        // وصول البيانات) — دوائر نابضة بنفس حجم/تباعد CategoriesRow الحقيقية
+        // حتى لا "تقفز" الصفحة لأعلى/أسفل لحظة استبدال الهيكل بالمحتوى.
+        if (categoriesLoading && categories.isEmpty()) {
+            item {
+                SectionReveal(index = 1) {
+                    HomeSectionHeaderSkeleton()
+                    CategoriesRowSkeleton()
+                }
+            }
+        }
+
         // ── 2. التصنيفات — أول 5 فقط، بصف واحد ──────────────────
         if (categories.isNotEmpty()) {
             item {
+                SectionReveal(index = 1) {
                 HomeSectionHeader(title = "التصنيفات", onViewAll = onViewCategories)
                 CategoriesRow(
                     categories = categories.take(5),
                     onCategoryClick = onCategoryClick,
                 )
+                }
             }
         }
 
@@ -187,9 +238,31 @@ fun HomeScreen(
             item { SectionErrorRetry(homeProductsError!!) { viewModel.loadHomeProducts() } }
         }
 
+        // ── هيكل تحميل مؤقت لأقسام المنتجات — قسمين وهميين (بدل فراغ
+        // كامل لحد وصول أول منتج) حتى يشعر المستخدم أن المحتوى "قادم"
+        // فعلاً وليس أن الصفحة توقفت أو فشلت بصمت.
+        if (homeProductsLoading &&
+            onSaleProducts.isEmpty() && featuredProducts.isEmpty() &&
+            bestSellers.isEmpty() && newArrivals.isEmpty()
+        ) {
+            item {
+                SectionReveal(index = 2) {
+                    HomeSectionHeaderSkeleton()
+                    ProductRowSkeleton()
+                }
+            }
+            item {
+                SectionReveal(index = 3) {
+                    HomeSectionHeaderSkeleton()
+                    ProductRowSkeleton()
+                }
+            }
+        }
+
         // ── 3. العروض والخصومات ─────────────────────────────────
         if (onSaleProducts.isNotEmpty()) {
             item {
+                SectionReveal(index = 2) {
                 HomeSectionHeader(title = "العروض والخصومات", onViewAll = { onViewAllClick("onSale") })
                 ProductRow(
                     products = onSaleProducts,
@@ -197,12 +270,14 @@ fun HomeScreen(
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
                 )
+                }
             }
         }
 
         // ── 4. المنتجات المميزة ──────────────────────────────────
         if (featuredProducts.isNotEmpty()) {
             item {
+                SectionReveal(index = 3) {
                 HomeSectionHeader(title = "المنتجات المميزة", onViewAll = { onViewAllClick("featured") })
                 ProductRow(
                     products = featuredProducts,
@@ -210,12 +285,14 @@ fun HomeScreen(
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
                 )
+                }
             }
         }
 
         // ── 5. الأكثر مبيعاً ────────────────────────────────────
         if (bestSellers.isNotEmpty()) {
             item {
+                SectionReveal(index = 4) {
                 HomeSectionHeader(title = "الأكثر مبيعاً", onViewAll = { onViewAllClick("bestSeller") })
                 ProductRow(
                     products = bestSellers,
@@ -223,12 +300,14 @@ fun HomeScreen(
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
                 )
+                }
             }
         }
 
         // ── 6. المنتجات الجديدة ──────────────────────────────────
         if (newArrivals.isNotEmpty()) {
             item {
+                SectionReveal(index = 5) {
                 HomeSectionHeader(title = "المنتجات الجديدة", onViewAll = { onViewAllClick("new") })
                 ProductRow(
                     products = newArrivals,
@@ -236,12 +315,14 @@ fun HomeScreen(
                     onProductClick = onProductClick,
                     onFavoriteToggle = { viewModel.toggleFavorite(it) },
                 )
+                }
             }
         }
 
         // ── 7. العلامات التجارية ─────────────────────────────────
         if (brands.isNotEmpty()) {
             item {
+                SectionReveal(index = 6) {
                 // ✅ "عرض المزيد" هنا يفتح نفس شاشة التصنيفات/العلامات
                 // التجارية الجديدة (مباشرة على قسم العلامات) بدل صفحة
                 // المنتجات بفلتر "brands" المجرَّد — نفس شاشة تصفّح واحدة
@@ -249,6 +330,7 @@ fun HomeScreen(
                 HomeSectionHeader(title = "العلامات التجارية", onViewAll = onViewCategories)
                 BrandsRow(brands = brands)
                 Spacer(Modifier.height(8.dp))
+                }
             }
         }
     }
@@ -316,33 +398,48 @@ private fun BannerSlider(
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         when {
-            // حالة تحميل
+            // حالة تحميل — نفس نبضة الـskeleton المستخدمة بباقي التطبيق
+            // (بديل أنيق لدوّارة تحميل مجرّدة فوق خلفية ثابتة).
             isLoading && banners.isEmpty() -> {
+                val alpha by com.eleven.store.ui.components.rememberInfiniteTransitionAlpha()
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.linearGradient(
-                                listOf(Neutral300, Neutral100)
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Accent)
-                }
+                        .background(Neutral200.copy(alpha = alpha))
+                )
             }
 
-            // لا يوجد بانرات → fallback ذهبي مثل الموقع
+            // لا يوجد بانرات → واجهة ترحيبية أغنى بصرياً من الموقع (تدرّج
+            // قطري + دوائر زخرفية خفيفة) بدل تدرّج أفقي مسطّح — أول شيء
+            // يراه مستخدم متجر جديد بلا بانرات مُعدّة من لوحة التحكم بعد،
+            // فمن المهم ألا يبدو كخلفية فارغة/بديلة واضحة.
             banners.isEmpty() -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
-                            Brush.horizontalGradient(
-                                listOf(Accent.copy(alpha = 0.80f), Accent)
+                            Brush.linearGradient(
+                                listOf(Ink, Color(0xFF1E293B), Accent),
                             )
                         )
                 ) {
+                    // دوائر زخرفية شفافة — إحساس "علامة تجارية" بدل مسطح تماماً
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 40.dp, y = (-40).dp)
+                            .size(160.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.06f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .offset(x = 20.dp, y = 30.dp)
+                            .size(90.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.08f))
+                    )
                     // توسيط رأسي فقط + محاذاة للبداية أفقياً — مطابق للموقع:
                     // flex items-center justify-start px-6 (وليس توسيط كامل)
                     Column(
@@ -355,7 +452,7 @@ private fun BannerSlider(
                         Text(
                             "مرحباً في Eleven",
                             color = Color.White,
-                            fontSize = 20.sp,
+                            fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Serif,
                         )
@@ -365,16 +462,16 @@ private fun BannerSlider(
                             color = Color.White.copy(alpha = 0.85f),
                             fontSize = 12.sp,
                         )
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(14.dp))
                         Button(
                             onClick = onShopClick,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color.White,
-                                contentColor = Accent,
+                                contentColor = Ink,
                             ),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp),
                         ) {
                             Text("تسوق الآن", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
@@ -514,6 +611,60 @@ private fun BannerSlider(
                     }
                 }
             }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SKELETONS — التصنيفات/المنتجات (هيكل تحميل مؤقت لحد وصول البيانات)
+//  ✅ جديد: نفس أبعاد/تباعد الصفوف الحقيقية (CategoriesRow/ProductRow)
+//  تماماً حتى لا تتحرك الصفحة رأسياً لحظة استبدال الهيكل بالمحتوى الفعلي.
+// ══════════════════════════════════════════════════════════════
+
+@Composable
+private fun HomeSectionHeaderSkeleton() {
+    val alpha by rememberInfiniteTransitionAlpha()
+    val tone = Neutral200.copy(alpha = alpha)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(120.dp).height(16.dp).background(tone, RoundedCornerShape(4.dp)))
+        Box(Modifier.width(60.dp).height(14.dp).background(tone, RoundedCornerShape(4.dp)))
+    }
+}
+
+@Composable
+private fun CategoriesRowSkeleton() {
+    val alpha by rememberInfiniteTransitionAlpha()
+    val tone = Neutral200.copy(alpha = alpha)
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(5) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(Modifier.size(52.dp).clip(CircleShape).background(tone))
+                Box(Modifier.width(44.dp).height(10.dp).background(tone, RoundedCornerShape(4.dp)))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProductRowSkeleton() {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(3) {
+            ProductCardSkeleton(modifier = Modifier.width(160.dp))
         }
     }
 }

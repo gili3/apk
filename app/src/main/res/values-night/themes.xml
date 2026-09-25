@@ -10,4 +10,11 @@
         <item name="android:textColorPrimary">@color/foreground</item>
         <item name="android:colorAccent">@color/primary</item>
     </style>
+
+    <!-- ✅ جديد: نفس ثيم شاشة الإقلاع بالوضع الداكن — راجع values/themes.xml -->
+    <style name="Theme.ElevenStore.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.ElevenStore</item>
+    </style>
 </resources>

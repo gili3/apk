@@ -111,8 +111,20 @@ val Muted           = Neutral100
 val MutedForeground = TextSecondary
 
 // Accent = نفس Primary (لا يوجد لون تمييز تجاري منفصل بعد الآن)
-val Accent           = Ink
-val AccentForeground = PureWhite
+//
+// 🐛 هذا هو السبب الجذري الحقيقي وراء "ألوان لوحة التحكم ما بتتغيّر بالتطبيق":
+// كانا يُعرَّفان سابقاً كـ val ثابت في وقت الترجمة (= Ink حرفياً)، وليسا
+// كقيمة تُقرأ من الثيم الحالي (CompositionLocal). وبما أن أكثر من 70 موضع
+// في كل شاشات التطبيق (الأزرار، الروابط، الأيقونات، الحقول المركّزة،
+// صناديق الاختيار...) تستخدم Accent مباشرة بدل MaterialTheme.colorScheme.primary،
+// فإن أي لون يختاره الأدمن من لوحة التحكم لم يكن يصل فعلياً لأي من هذه
+// العناصر إطلاقاً — بغض النظر عن الوضع الفاتح/الداكن أو نجاح الحفظ. تحويلهما
+// إلى خاصية Composable تقرأ من الثيم الحالي يجعل كل نقطة استخدام قائمة (لا
+// حاجة لتعديل عشرات الملفات) تعكس فوراً لون primaryColor المخصَّص من الأدمن.
+val Accent: Color
+    @Composable get() = MaterialTheme.colorScheme.primary
+val AccentForeground: Color
+    @Composable get() = MaterialTheme.colorScheme.onPrimary
 
 val DestructiveForeground = PureWhite
 val SuccessForeground     = PureWhite
@@ -151,8 +163,12 @@ private val LightColorScheme = lightColorScheme(
     onSecondary = SecondaryForeground,
     secondaryContainer = Neutral100,
     onSecondaryContainer = Foreground,
-    tertiary = Accent,
-    onTertiary = AccentForeground,
+    // ملاحظة: القيمة الأساسية هنا Ink/PureWhite حرفياً (وليس Accent/AccentForeground)
+    // لأن هذا تعريف الثيم الأساسي نفسه — Accent أصبحت خاصية Composable تُقرأ
+    // *من* MaterialTheme.colorScheme.primary بعد التطبيق، فلا يصح استخدامها هنا
+    // كمُدخل لبناء الثيم نفسه (سيسبب مرجعية دائرية + خطأ ترجمة خارج سياق Composable).
+    tertiary = Ink,
+    onTertiary = PureWhite,
     tertiaryContainer = Primary100,
     onTertiaryContainer = Primary700,
     background = Background,
@@ -319,10 +335,17 @@ fun ElevenStoreTheme(
 ) {
     val base = if (darkTheme) DarkColorScheme else LightColorScheme
 
-    val primaryOverride = primaryColor.toColorOrNull()
-    val secondaryOverride = secondaryColor.toColorOrNull()
-    // لون الخلفية المخصَّص يُطبَّق فقط بالوضع الفاتح — بالوضع الداكن نُبقي
-    // خلفية داكنة دائماً حفاظاً على وضوح النصوص فوقها بغض النظر عن اختيار الأدمن.
+    // ✅ إصلاح خطأ بصري حرج: كانت ألوان primary/secondary من لوحة التحكم
+    // تُطبَّق دائماً بغض النظر عن الوضع الداكن/الفاتح، لكن الخلفية وحدها كانت
+    // تُستثنى في الوضع الداكن (تبقى Ink دائماً). النتيجة: أي ثيم جاهز غير
+    // "default"/"slateDark" (navy, royal, emerald, wine, amber, teal, rose)
+    // كان يظهر بتباين فعلي ~1.9–2.5:1 فوق الخلفية الداكنة القسرية بدل
+    // ~7–9.5:1 كما تعرضه المعاينة في لوحة التحكم — أي أن الأزرار الأساسية
+    // تكاد تختفي بصرياً لأي مستخدم بالوضع الداكن. الحل: نفس المنطق المطبّق
+    // على الخلفية — الثلاثة ألوان تُخصَّص معاً فقط بالوضع الفاتح، وبالوضع
+    // الداكن تبقى القيم الافتراضية المصمَّمة أصلاً لتباين جيد فوق خلفية داكنة.
+    val primaryOverride = if (!darkTheme) primaryColor.toColorOrNull() else null
+    val secondaryOverride = if (!darkTheme) secondaryColor.toColorOrNull() else null
     val backgroundOverride = if (!darkTheme) backgroundColor.toColorOrNull() else null
 
     val colorScheme = base.copy(

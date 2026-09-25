@@ -39,6 +39,7 @@ import com.eleven.store.ui.components.SnackbarType
 import com.eleven.store.ui.components.showMessage
 import com.eleven.store.ui.components.ElevenButton
 import com.eleven.store.ui.components.ElevenTopBar
+import com.eleven.store.ui.components.rememberInfiniteTransitionAlpha
 import com.eleven.store.ui.theme.*
 import com.eleven.store.ui.viewmodel.MainViewModel
 import com.eleven.store.data.model.NotificationItem
@@ -1633,16 +1634,3 @@ private fun NotificationSkeletonCard() {
     }
 }
 
-@Composable
-private fun rememberInfiniteTransitionAlpha(): State<Float> {
-    val transition = rememberInfiniteTransition(label = "skeleton")
-    return transition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(700, easing = androidx.compose.animation.core.LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "skeletonAlpha",
-    )
-}

@@ -163,8 +163,13 @@ data class Address(
     val city: String = "",
     val address: String = "",
     val isDefault: Boolean = false,
+    // ✅ إحداثيات الموقع من خرائط جوجل (اختيارية — 0.0 يعني لم يُحدَّد بعد،
+    // العنوان النصي أعلاه يبقى المصدر الأساسي، هذي فقط لتسهيل التوصيل)
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
 ) {
     val displayName: String get() = fullName.ifBlank { name }
+    val hasLocation: Boolean get() = latitude != 0.0 || longitude != 0.0
 }
 
 // ─── Store Settings ────────────────────────────────────────────

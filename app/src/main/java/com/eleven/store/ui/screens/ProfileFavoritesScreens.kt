@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -326,6 +327,23 @@ fun ProfileScreen(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(addr.phone, color = muted, fontSize = 12.sp)
+                                // ✅ جديد: رابط فتح الموقع المحفوظ في تطبيق الخرائط
+                                if (addr.hasLocation) {
+                                    val ctx = LocalContext.current
+                                    Text(
+                                        "📍 فتح في الخريطة",
+                                        color = Accent,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.clickable {
+                                            val uri = android.net.Uri.parse(
+                                                "geo:${addr.latitude},${addr.longitude}?q=${addr.latitude},${addr.longitude}",
+                                            )
+                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                                            runCatching { ctx.startActivity(intent) }
+                                        },
+                                    )
+                                }
                             }
                             // ✅ أزرار بالحجم الافتراضي (48dp) بدل 32dp — أسهل للّمس
                             IconButton(
@@ -371,13 +389,15 @@ fun ProfileScreen(
                         // ✅ توحيد البيانات: عنوان جديد يبدأ ببيانات الملف الشخصي
                         defaultFullName = rawName ?: "",
                         defaultPhone = userProfile?.phone ?: "",
-                        onSave = { fullName, phoneNumber, city, address, isDefault ->
+                        onSave = { fullName, phoneNumber, city, address, isDefault, latitude, longitude ->
                             val newAddress = Address(
                                 fullName = fullName,
                                 phone = phoneNumber,
                                 city = city,
                                 address = address,
                                 isDefault = isDefault,
+                                latitude = latitude,
+                                longitude = longitude,
                             )
                             if (editingAddress != null) {
                                 viewModel.updateAddress(
@@ -519,7 +539,7 @@ private fun ProfileValueRow(label: String, value: String) {
 // ✅ إصلاح: كانت private، ما منع إعادة استخدامها من شاشة الدفع (انظر CheckoutScreens.kt)
 fun AddressFormCard(
     initial: Address?,
-    onSave: (fullName: String, phone: String, city: String, address: String, isDefault: Boolean) -> Unit,
+    onSave: (fullName: String, phone: String, city: String, address: String, isDefault: Boolean, latitude: Double, longitude: Double) -> Unit,
     onCancel: () -> Unit,
     // ✅ إصلاح: توحيد حقلي الاسم والهاتف بين الملف الشخصي والعنوان — عنوان
     // جديد يُعبَّأ مسبقاً ببيانات الملف الشخصي بدل تكرار كتابتها من الصفر
@@ -543,6 +563,13 @@ fun AddressFormCard(
     var city by remember(formKey) { mutableStateOf(initial?.city ?: "") }
     var address by remember(formKey) { mutableStateOf(initial?.address ?: "") }
     var isDefault by remember(formKey) { mutableStateOf(initial?.isDefault ?: false) }
+    var latitude by remember(formKey) { mutableStateOf(initial?.latitude ?: 0.0) }
+    var longitude by remember(formKey) { mutableStateOf(initial?.longitude ?: 0.0) }
+    // ✅ إصلاح الثغرة: زر الحفظ كان يتحقق فقط من الحقول النصية، بلا أي تحقق من
+    // hasLocation — فيمكن حفظ عنوان بإحداثيات 0.0/0.0 (لا تأكيد GPS حقيقي على
+    // الإطلاق)، ما يُبطل أي فحص لاحق لمنطقة التوصيل مبنيّ فوق هذه الإحداثيات.
+    var showLocationError by remember(formKey) { mutableStateOf(false) }
+    val hasLocation = latitude != 0.0 || longitude != 0.0
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -602,6 +629,28 @@ fun AddressFormCard(
                 }
             }
 
+            // ✅ جديد: خريطة لتحديد إحداثيات موقع التوصيل بدقة (اختياري، يُضاف
+            // للعنوان النصي أعلاه بدل استبداله)
+            com.eleven.store.ui.components.LocationPicker(
+                initialLatitude = latitude,
+                initialLongitude = longitude,
+                onLocationSelected = { lat, lng ->
+                    latitude = lat; longitude = lng
+                    showLocationError = false
+                },
+                onAddressResolved = { resolvedCity, resolvedLine ->
+                    if (city.isBlank() && resolvedCity.isNotBlank()) city = resolvedCity
+                    if (address.isBlank() && resolvedLine.isNotBlank()) address = resolvedLine
+                },
+            )
+            if (showLocationError) {
+                Text(
+                    "يجب تحديد موقعك على الخريطة (اسحب الخريطة أو اضغط زر موقعي الحالي) قبل الحفظ",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             // Checkbox
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -630,7 +679,11 @@ fun AddressFormCard(
                         if (fullName.isNotBlank() && phone.isNotBlank() &&
                             city.isNotBlank() && address.isNotBlank()
                         ) {
-                            onSave(fullName, phone, city, address, isDefault)
+                            if (!hasLocation) {
+                                showLocationError = true
+                            } else {
+                                onSave(fullName, phone, city, address, isDefault, latitude, longitude)
+                            }
                         }
                     },
                     modifier = Modifier

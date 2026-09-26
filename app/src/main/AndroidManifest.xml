@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- ✅ جديد: تحديد الموقع لاختيار عنوان التوصيل على الخريطة -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:name=".ElevenStoreApp"
@@ -49,6 +52,13 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="@string/default_notification_channel_id" />
+
+        <!-- ✅ جديد: مفتاح خرائط جوجل — يُحقن وقت البناء من local.properties/CI
+             (نفس نمط أسرار التوقيع وAlgolia، راجع manifestPlaceholders في
+             app/build.gradle) — لا يُكتب صراحة هنا أبداً. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
 
     </application>
 </manifest>

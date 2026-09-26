@@ -580,6 +580,8 @@ class FirestoreRepository {
                     city      = m["city"]?.toString() ?: "",
                     address   = m["address"]?.toString() ?: "",
                     isDefault = m["isDefault"] as? Boolean ?: false,
+                    latitude  = (m["latitude"] as? Number)?.toDouble() ?: 0.0,
+                    longitude = (m["longitude"] as? Number)?.toDouble() ?: 0.0,
                 )
             }
 
@@ -1083,11 +1085,28 @@ class FirestoreRepository {
         db.collection("contactMessages").document().set(data).await()
     }
 
+    // ✅ إصلاح: تفعيل "افتراضي" على عنوان لم يكن يُلغي الصفة عن باقي عناوين
+    // المستخدم، فيمكن أن ينتهي به الأمر بأكثر من عنوان "افتراضي" بنفس الوقت
+    // — والدفع يختار أول واحد يعثر عليه بترتيب Firestore، وليس بالضرورة آخر
+    // ما فعّله المستخدم فعلياً. الآن، أي حفظ بـisDefault=true يُلغي الصفة عن
+    // كل عناوين المستخدم الأخرى ضمن نفس batch الذرّية.
+    private suspend fun unsetOtherDefaults(userId: String, exceptAddressId: String?) {
+        val others = db.collection("users").document(userId).collection("addresses")
+            .whereEqualTo("isDefault", true)
+            .get().await()
+        val toClear = others.documents.filter { it.id != exceptAddressId }
+        if (toClear.isEmpty()) return
+        val batch = db.batch()
+        toClear.forEach { batch.update(it.reference, "isDefault", false) }
+        batch.commit().await()
+    }
+
     suspend fun addAddress(address: Address): String {
         requireOnline()
         val u = uid ?: return ""
         val ref = db.collection("users").document(u).collection("addresses").document()
         ref.set(address).await()
+        if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = ref.id)
         return ref.id
     }
 
@@ -1095,6 +1114,7 @@ class FirestoreRepository {
         requireOnline()
         val u = uid ?: return
         db.collection("users").document(u).collection("addresses").document(addressId).set(address).await()
+        if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = addressId)
     }
 
     suspend fun deleteAddress(addressId: String) {
@@ -1202,9 +1222,60 @@ class FirestoreRepository {
         }
     }
 
+    // ✅ جديد: التحقق من مناطق التوصيل — خط دفاع إضافي على مستوى العميل نفسه
+    // (تجربة مستخدم أوضح: رسالة فورية قبل محاولة الكتابة أصلاً)، بينما خط
+    // الدفاع الحقيقي غير القابل للتجاوز يبقى firestore.rules (bbox تقريبي)
+    // + السيرفر (delivery-zone-service.ts، مضلّع دقيق، لمسار الموقع). نفس
+    // مبدأ evaluateCoupon أعلاه: تكرار مقصود للتحقق، وليس اعتماداً عليه فقط.
+    private suspend fun assertWithinDeliveryZone(address: Address?) {
+        val zonesDoc = try {
+            db.collection("settings").document("deliveryZones").get().await()
+        } catch (e: Exception) {
+            return // تعذّر القراءة (غالباً بلا اتصال مؤقت أثناء الانتقال) — لا نمنع الطلب بسبب هذا وحده
+        }
+        @Suppress("UNCHECKED_CAST")
+        val zonesRaw = zonesDoc.get("zones") as? List<Map<String, Any?>> ?: emptyList()
+        val activeZones = zonesRaw.filter { it["isActive"] == true }
+        if (activeZones.isEmpty()) return // الميزة غير مفعّلة أصلاً (لا مناطق محفوظة، أو كلها معطّلة)
+
+        if (address == null || !address.hasLocation) {
+            throw IllegalStateException("يجب تحديد موقعك على الخريطة لإتمام الطلب — عنوانك خارج نطاق مناطق التوصيل المتاحة")
+        }
+
+        val insideAnyZone = activeZones.any { zone ->
+            @Suppress("UNCHECKED_CAST")
+            val polygon = (zone["polygon"] as? List<Map<String, Any?>>)
+                ?.mapNotNull { pt ->
+                    val lat = (pt["lat"] as? Number)?.toDouble()
+                    val lng = (pt["lng"] as? Number)?.toDouble()
+                    if (lat != null && lng != null) lat to lng else null
+                } ?: emptyList()
+            polygon.size >= 3 && isPointInPolygon(address.latitude, address.longitude, polygon)
+        }
+        if (!insideAnyZone) {
+            throw IllegalStateException("عذراً، موقع التوصيل الذي حدّدته يقع خارج مناطق التوصيل المعتمدة حالياً")
+        }
+    }
+
+    // خوارزمية Ray Casting القياسية — نفس منطق shared/deliveryZones.ts::isPointInPolygon بالضبط
+    private fun isPointInPolygon(lat: Double, lng: Double, polygon: List<Pair<Double, Double>>): Boolean {
+        var inside = false
+        var j = polygon.size - 1
+        for (i in polygon.indices) {
+            val (yi, xi) = polygon[i]
+            val (yj, xj) = polygon[j]
+            val intersects = (yi > lat) != (yj > lat) &&
+                lng < (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if (intersects) inside = !inside
+            j = i
+        }
+        return inside
+    }
+
     suspend fun placeOrder(order: Order, couponCode: String? = null): String {
         requireOnline()
         val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
+        assertWithinDeliveryZone(order.shippingAddress)
         val ref = db.collection("orders").document()
         val verificationToken = java.util.UUID.randomUUID().toString().replace("-", "").take(26)
 

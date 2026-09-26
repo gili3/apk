@@ -358,10 +358,13 @@ private fun AddressStepContent(
                 initial = null,
                 defaultFullName = defaultFullName,
                 defaultPhone = defaultPhone,
-                onSave = { fullName, phone, city, address, isDefault ->
+                onSave = { fullName, phone, city, address, isDefault, latitude, longitude ->
                     isSaving = true
                     onAddAddress(
-                        Address(fullName = fullName, phone = phone, city = city, address = address, isDefault = isDefault),
+                        Address(
+                            fullName = fullName, phone = phone, city = city, address = address,
+                            isDefault = isDefault, latitude = latitude, longitude = longitude,
+                        ),
                     ) {
                         isSaving = false
                         showAddDialog = false

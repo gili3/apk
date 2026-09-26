@@ -41,6 +41,11 @@ android {
         // بنفس نمط أسرار التوقيع أعلاه — لا يُكتب صراحة بأي ملف Kotlin.
         buildConfigField "String", "ALGOLIA_APP_ID", "\"${secret('ALGOLIA_APP_ID', 'ALGOLIA_APP_ID') ?: ""}\""
         buildConfigField "String", "ALGOLIA_SEARCH_API_KEY", "\"${secret('ALGOLIA_SEARCH_API_KEY', 'ALGOLIA_SEARCH_API_KEY') ?: ""}\""
+
+        // ✅ جديد: مفتاح خرائط جوجل (Android API Key، مقيَّد بـ SHA-1 + applicationId
+        // من Google Cloud Console) — يُحقن بنفس نمط الأسرار أعلاه، ويُقرأ داخل
+        // AndroidManifest.xml عبر ${MAPS_API_KEY}.
+        manifestPlaceholders.MAPS_API_KEY = secret('MAPS_API_KEY', 'MAPS_API_KEY') ?: ""
     }
 
     signingConfigs {
@@ -143,6 +148,12 @@ dependencies {
 
     // Google Sign-In (لمطابقة "تسجيل الدخول عبر Google" في الموقع)
     implementation 'com.google.android.gms:play-services-auth:21.2.0'
+
+    // ✅ جديد: تحديد الموقع الحالي (Fused Location) + خريطة اختيار عنوان
+    // التوصيل (شاشة العنوان — Checkout/Profile)
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+    implementation 'com.google.android.gms:play-services-maps:19.0.0'
+    implementation 'com.google.maps.android:maps-compose:6.1.2'
     
     // WorkManager
     implementation "androidx.work:work-runtime-ktx:2.9.0"

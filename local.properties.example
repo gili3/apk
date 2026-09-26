@@ -24,3 +24,12 @@ sdk.dir=/absolute/path/to/Android/sdk
 ALGOLIA_APP_ID=
 ALGOLIA_SEARCH_API_KEY=
 
+# ─────────────────────────────────────────────────────────────────────────
+# خرائط جوجل — لتحديد الموقع الحالي واختيار عنوان التوصيل على الخريطة.
+# أنشئ مفتاح "Android API Key" من Google Cloud Console وقيّده بـ:
+#   - SHA-1 لبصمة التوقيع (debug/release)
+#   - applicationId: com.eleven.store
+# وفعّل فيه: Maps SDK for Android
+# ─────────────────────────────────────────────────────────────────────────
+MAPS_API_KEY=
+

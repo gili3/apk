@@ -130,6 +130,9 @@ class MainActivity : ComponentActivity() {
                     primaryColor = storeSettings.primaryColor,
                     secondaryColor = storeSettings.secondaryColor,
                     backgroundColor = storeSettings.backgroundColor,
+                    surfaceColor = storeSettings.surfaceColor,
+                    textColor = storeSettings.textColor,
+                    accentColor = storeSettings.accentColor,
                 ) {
                     // أول رسمة فعلية للواجهة ← نُخفي شاشة إقلاع النظام الآن
                     // (شاشة الترحيب AppWelcomeOverlay بداخل ElevenApp هي من

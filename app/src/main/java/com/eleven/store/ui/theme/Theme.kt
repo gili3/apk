@@ -121,10 +121,15 @@ val MutedForeground = TextSecondary
 // العناصر إطلاقاً — بغض النظر عن الوضع الفاتح/الداكن أو نجاح الحفظ. تحويلهما
 // إلى خاصية Composable تقرأ من الثيم الحالي يجعل كل نقطة استخدام قائمة (لا
 // حاجة لتعديل عشرات الملفات) تعكس فوراً لون primaryColor المخصَّص من الأدمن.
+// ✅ توسعة الثيمات: Accent كان يقرأ من primary حرفياً (لا يوجد لون تمييز
+// منفصل). الآن يقرأ من tertiary بدل ذلك — وهو الفتحة التي يملأها
+// accentColor القادم من لوحة التحكم في ElevenStoreTheme أدناه — حتى يصبح
+// قابلاً للتخصيص باستقلالية عن Primary دون الحاجة لتعديل أي من عشرات
+// المواضع التي تستخدم Accent مباشرة في الشاشات.
 val Accent: Color
-    @Composable get() = MaterialTheme.colorScheme.primary
+    @Composable get() = MaterialTheme.colorScheme.tertiary
 val AccentForeground: Color
-    @Composable get() = MaterialTheme.colorScheme.onPrimary
+    @Composable get() = MaterialTheme.colorScheme.onTertiary
 
 val DestructiveForeground = PureWhite
 val SuccessForeground     = PureWhite
@@ -325,38 +330,113 @@ private fun contrastingOnColor(bg: Color): Color {
     return if (luminance > 0.6) Ink else PureWhite
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  اشتقاق ألوان الوضع الداكن من ألوان الوضع الفاتح (نفس الخوارزمية
+//  حرفياً في themePresets.ts::deriveDarkTriplet بلوحة التحكم، حتى تطابق
+//  المعاينة هناك ما يظهر فعلياً هنا). الفكرة: نحافظ على تدرّج الثيم اللوني
+//  (Hue) ونغيّر فقط السطوع (Lightness) — فتبقى هوية الثيم واضحة بالوضعين
+//  دون أن يحتاج الأدمن لإدخال 12 لوناً يدوياً (6 لكل وضع).
+// ═══════════════════════════════════════════════════════════════
+
+private fun rgbToHsl(r: Float, g: Float, b: Float): Triple<Float, Float, Float> {
+    val max = maxOf(r, g, b)
+    val min = minOf(r, g, b)
+    val l = (max + min) / 2f
+    if (max == min) return Triple(0f, 0f, l)
+    val d = max - min
+    val s = if (l > 0.5f) d / (2f - max - min) else d / (max + min)
+    val h = when (max) {
+        r -> (g - b) / d + (if (g < b) 6f else 0f)
+        g -> (b - r) / d + 2f
+        else -> (r - g) / d + 4f
+    } / 6f
+    return Triple(h, s, l)
+}
+
+private fun hslToRgb(h: Float, s: Float, l: Float): Triple<Float, Float, Float> {
+    if (s == 0f) return Triple(l, l, l)
+    fun hue2rgb(p: Float, q: Float, tIn: Float): Float {
+        var t = tIn
+        if (t < 0f) t += 1f
+        if (t > 1f) t -= 1f
+        return when {
+            t < 1f / 6f -> p + (q - p) * 6f * t
+            t < 1f / 2f -> q
+            t < 2f / 3f -> p + (q - p) * (2f / 3f - t) * 6f
+            else -> p
+        }
+    }
+    val q = if (l < 0.5f) l * (1f + s) else l + s - l * s
+    val p = 2f * l - q
+    return Triple(hue2rgb(p, q, h + 1f / 3f), hue2rgb(p, q, h), hue2rgb(p, q, h - 1f / 3f))
+}
+
+/** يشتق درجة بسطوع مستهدف مختلف من لون معيّن، مع الحفاظ على تدرّجه اللوني. */
+private fun deriveDarkVariant(light: Color, targetLightness: Float, satScale: Float = 1f): Color {
+    val (h, s, _) = rgbToHsl(light.red, light.green, light.blue)
+    val (r, g, b) = hslToRgb(h, (s * satScale).coerceIn(0f, 1f), targetLightness)
+    return Color(r.coerceIn(0f, 1f), g.coerceIn(0f, 1f), b.coerceIn(0f, 1f))
+}
+
 @Composable
 fun ElevenStoreTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     primaryColor: String = "",
     secondaryColor: String = "",
     backgroundColor: String = "",
+    // ✅ توسعة نظام الثيمات: تكتمل الست ألوان المقترحة من لوحة التحكم
+    // (Primary/Secondary/Background/Surface/Text/Accent). راجع Models.kt
+    // ::StoreSettings وthemePresets.ts بلوحة التحكم لنفس البنية هناك.
+    surfaceColor: String = "",
+    textColor: String = "",
+    accentColor: String = "",
     content: @Composable () -> Unit
 ) {
     val base = if (darkTheme) DarkColorScheme else LightColorScheme
 
-    // ✅ إصلاح خطأ بصري حرج: كانت ألوان primary/secondary من لوحة التحكم
-    // تُطبَّق دائماً بغض النظر عن الوضع الداكن/الفاتح، لكن الخلفية وحدها كانت
-    // تُستثنى في الوضع الداكن (تبقى Ink دائماً). النتيجة: أي ثيم جاهز غير
-    // "default"/"slateDark" (navy, royal, emerald, wine, amber, teal, rose)
-    // كان يظهر بتباين فعلي ~1.9–2.5:1 فوق الخلفية الداكنة القسرية بدل
-    // ~7–9.5:1 كما تعرضه المعاينة في لوحة التحكم — أي أن الأزرار الأساسية
-    // تكاد تختفي بصرياً لأي مستخدم بالوضع الداكن. الحل: نفس المنطق المطبّق
-    // على الخلفية — الثلاثة ألوان تُخصَّص معاً فقط بالوضع الفاتح، وبالوضع
-    // الداكن تبقى القيم الافتراضية المصمَّمة أصلاً لتباين جيد فوق خلفية داكنة.
-    val primaryOverride = if (!darkTheme) primaryColor.toColorOrNull() else null
-    val secondaryOverride = if (!darkTheme) secondaryColor.toColorOrNull() else null
-    val backgroundOverride = if (!darkTheme) backgroundColor.toColorOrNull() else null
+    // ✅ سابقاً: كل تخصيصات لوحة التحكم كانت تُستثنى بالكامل في الوضع
+    // الداكن (يبقى التصميم الافتراضي دائماً)، لأن تطبيق نفس قيم الوضع
+    // الفاتح حرفياً فوق خلفية داكنة يكسر التباين. الحل الآن: Primary/
+    // Secondary/Accent هي هوية الثيم فتُطبَّق في الوضعين معاً (يُعاد حساب
+    // onColor المناسب أوتوماتيكياً)، بينما Background/Surface/Text
+    // (المُدخلة كقيم الوضع الفاتح فقط) تُشتق منها نسخة الوضع الداكن
+    // حسابياً عبر deriveDarkVariant بدل تجاهلها بالكامل أو طلب إدخالها
+    // مرتين من الأدمن.
+    val primaryOverride = primaryColor.toColorOrNull()
+    val secondaryOverride = secondaryColor.toColorOrNull()
+    val accentOverride = accentColor.toColorOrNull() ?: primaryOverride
+
+    val lightBackground = backgroundColor.toColorOrNull()
+    val lightSurface = surfaceColor.toColorOrNull() ?: lightBackground
+    val lightText = textColor.toColorOrNull()
+
+    val backgroundOverride = if (!darkTheme) {
+        lightBackground
+    } else {
+        lightBackground?.let { deriveDarkVariant(it, targetLightness = 0.09f, satScale = 0.55f) }
+    }
+    val surfaceOverride = if (!darkTheme) {
+        lightSurface
+    } else {
+        lightSurface?.let { deriveDarkVariant(it, targetLightness = 0.15f, satScale = 0.45f) }
+    }
+    val textOverride = if (!darkTheme) {
+        lightText
+    } else {
+        lightText?.let { deriveDarkVariant(it, targetLightness = 0.92f, satScale = 0.25f) }
+    }
 
     val colorScheme = base.copy(
         primary = primaryOverride ?: base.primary,
         onPrimary = primaryOverride?.let(::contrastingOnColor) ?: base.onPrimary,
         secondary = secondaryOverride ?: base.secondary,
         onSecondary = secondaryOverride?.let(::contrastingOnColor) ?: base.onSecondary,
+        tertiary = accentOverride ?: base.tertiary,
+        onTertiary = accentOverride?.let(::contrastingOnColor) ?: base.onTertiary,
         background = backgroundOverride ?: base.background,
-        onBackground = backgroundOverride?.let(::contrastingOnColor) ?: base.onBackground,
-        surface = backgroundOverride ?: base.surface,
-        onSurface = backgroundOverride?.let(::contrastingOnColor) ?: base.onSurface,
+        onBackground = textOverride ?: backgroundOverride?.let(::contrastingOnColor) ?: base.onBackground,
+        surface = surfaceOverride ?: base.surface,
+        onSurface = textOverride ?: surfaceOverride?.let(::contrastingOnColor) ?: base.onSurface,
     )
 
     CompositionLocalProvider(

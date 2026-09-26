@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,7 +32,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.eleven.store.ui.theme.Ink
 
 // ═══════════════════════════════════════════════════════════════
 //  WELCOME OVERLAY — شاشة ترحيب داخل Compose
@@ -53,26 +53,35 @@ import com.eleven.store.ui.theme.Ink
 
 @Composable
 fun AppWelcomeOverlay() {
+    // ✅ كانت هذه الشاشة بألوان ثابتة (Ink) بغض النظر عن ثيم المتجر المختار
+    // من لوحة التحكم — أول انطباع يراه المستخدم كان لا يعكس هوية الثيم.
+    // الآن تُبنى من primary الحالي فعلياً (نفس اللون المطبَّق على الأزرار
+    // بباقي الشاشات)، بتدرّج بسيط نحو نسخة أغمق منه بدل لون ثانٍ منفصل —
+    // يكفي هذا للإحساس بالعمق دون الحاجة لأي حساب ألوان إضافي.
+    val primary = MaterialTheme.colorScheme.primary
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
+    val darkerPrimary = Color(primary.red * 0.65f, primary.green * 0.65f, primary.blue * 0.65f)
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    listOf(Ink, Color(0xFF1E293B)),
+                    listOf(primary, darkerPrimary),
                 ),
             ),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            BreathingWordmark()
+            BreathingWordmark(textColor = onPrimary)
             Spacer(Modifier.height(10.dp))
             Text(
                 "اكتشف مجموعتنا الحصرية",
-                color = Color.White.copy(alpha = 0.75f),
+                color = onPrimary.copy(alpha = 0.75f),
                 fontSize = 13.sp,
             )
             Spacer(Modifier.height(36.dp))
-            LoadingDots()
+            LoadingDots(dotColor = onPrimary)
         }
     }
 }
@@ -81,7 +90,7 @@ fun AppWelcomeOverlay() {
 // وأسلوب النص الترويجي بالبانر الرئيسي (FontFamily.Serif) حتى يبقى الانطباع
 // الأول متّسقاً مع باقي هوية التطبيق البصرية، لا عنصراً غريباً عنها.
 @Composable
-private fun BreathingWordmark() {
+private fun BreathingWordmark(textColor: Color) {
     val transition = rememberInfiniteTransition(label = "welcome_breathing")
     val scale by transition.animateFloat(
         initialValue = 0.94f,
@@ -104,7 +113,7 @@ private fun BreathingWordmark() {
 
     Text(
         "Eleven",
-        color = Color.White,
+        color = textColor,
         fontSize = 44.sp,
         fontWeight = FontWeight.Bold,
         fontFamily = FontFamily.Serif,
@@ -119,7 +128,7 @@ private fun BreathingWordmark() {
 // ثلاث نقاط تنبض بالتتابع (تأخير مختلف لكل نقطة) بدل دوّارة تحميل تقليدية —
 // إيحاء بحركة/تقدّم دون رقم أو نسبة مضلِّلة (لا نعرف مدة التحميل الفعلية).
 @Composable
-private fun LoadingDots() {
+private fun LoadingDots(dotColor: Color) {
     val transition = rememberInfiniteTransition(label = "welcome_dots")
     Row {
         val delays = listOf(0, 150, 300)
@@ -138,7 +147,7 @@ private fun LoadingDots() {
                     .size(8.dp)
                     .scale(0.7f + dotAlpha * 0.3f)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = dotAlpha)),
+                    .background(dotColor.copy(alpha = dotAlpha)),
             )
             if (index != delays.lastIndex) Spacer(Modifier.width(8.dp))
         }

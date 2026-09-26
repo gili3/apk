@@ -199,6 +199,13 @@ data class StoreSettings(
     val primaryColor: String = "",
     val secondaryColor: String = "",
     val backgroundColor: String = "",
+    // ✅ توسعة نظام الثيمات لتغطية الست ألوان المقترحة (Primary/Secondary/
+    // Background/Surface/Text/Accent) بدل ثلاثة فقط. نسخة الوضع الداكن من
+    // Background/Surface/Text تُشتق حسابياً في Theme.kt (deriveDarkVariant)
+    // وليست حقلاً مخزَّناً منفصلاً — يكفي الأدمن اختيار ثيم واحد فقط.
+    val surfaceColor: String = "",
+    val textColor: String = "",
+    val accentColor: String = "",
 ) {
     // اسم متوافق مع الكود القديم في الشاشات (checkout كان يستخدم freeShippingMinOrder)
     val freeShippingMinOrder: Double get() = freeShippingThreshold

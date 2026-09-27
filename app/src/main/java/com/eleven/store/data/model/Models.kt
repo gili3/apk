@@ -2,6 +2,7 @@ package com.eleven.store.data.model
 
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 
 // ─── User Profile ──────────────────────────────────────────────
 // مطابق لوثيقة users/{uid} في Firestore (نفس ما يقرأه/يكتبه الموقع)
@@ -162,7 +163,20 @@ data class Address(
     val phone: String = "",
     val city: String = "",
     val address: String = "",
-    val isDefault: Boolean = false,
+    // ✅ إصلاح حرج: getter الحقيقي لـKotlin لخاصية تبدأ بـ"is" هو isDefault()
+    // نفسه (بلا "get" إضافية) — لكن Firestore's POJO mapper يتعامل معه كـ
+    // JavaBean boolean getter عادي، فيزيل بادئة "is" ويحوّل الحرف التالي
+    // لصغير، فيكتب الحقل فعلياً باسم "default" وليس "isDefault" بالمستند!
+    // النتيجة: ref.set(address) بـaddAddress()/updateAddress() لم يكن يكتب
+    // حقل "isDefault" إطلاقاً — بينما قاعدة الأمان isValidAddress() تشترط
+    // data.isDefault is bool صراحة، فتفشل الكتابة PERMISSION_DENIED لكل
+    // إنشاء/تعديل عنوان (وبما أن حفظ العنوان يتطلب تحديد موقع بالخريطة أولاً
+    // بواجهة المستخدم، يظهر العطل وكأنه مرتبط بالخريطة تحديداً بينما هو في
+    // الحقيقة يصيب كل حفظ عنوان بلا استثناء). @PropertyName يفرض الاسم
+    // الصريح "isDefault" بالقراءة والكتابة معاً، مطابقاً لما تتوقعه القاعدة
+    // ولما تكتبه unsetOtherDefaults() يدوياً عبر batch.update(..., "isDefault", ...).
+    @get:PropertyName("isDefault") @set:PropertyName("isDefault")
+    var isDefault: Boolean = false,
     // ✅ إحداثيات الموقع من خرائط جوجل (اختيارية — 0.0 يعني لم يُحدَّد بعد،
     // العنوان النصي أعلاه يبقى المصدر الأساسي، هذي فقط لتسهيل التوصيل)
     val latitude: Double = 0.0,

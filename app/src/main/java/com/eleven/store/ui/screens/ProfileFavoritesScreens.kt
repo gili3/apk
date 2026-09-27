@@ -641,23 +641,34 @@ fun AddressFormCard(
 
             // ✅ جديد: خريطة لتحديد إحداثيات موقع التوصيل بدقة (اختياري، يُضاف
             // للعنوان النصي أعلاه بدل استبداله)
-            com.eleven.store.ui.components.LocationPicker(
-                initialLatitude = latitude,
-                initialLongitude = longitude,
-                onLocationSelected = { lat, lng ->
-                    latitude = lat; longitude = lng
-                    showLocationError = false
-                },
-                // ✅ إصلاح: كانت تُعبَّأ فقط لو الحقل فارغاً، فيمكن أن يبقى نص
-                // مكتوب يدوياً غير مطابق لموقع الدبوس الفعلي بعد تحريكه. الآن
-                // الخريطة هي مصدر الحقيقة: أي تحريك للدبوس يحدّث النص دائماً
-                // ليطابق الموقع الفعلي على الخريطة.
-                onAddressResolved = { resolvedCity, resolvedLine ->
-                    if (resolvedCity.isNotBlank()) city = resolvedCity
-                    if (resolvedLine.isNotBlank()) address = resolvedLine
-                },
-                onMapTouchChanged = onMapTouchChanged,
-            )
+            // ✅ إصلاح: ربط بـformKey — بدونه، التبديل المباشر بين تعديل عنوانين
+            // مختلفين (بلا إغلاق النموذج بينهما) يُبقي نفس نسخة LocationPicker
+            // حيّة بحالتها الداخلية القديمة (موقع الكاميرا وhasMapMoved) رغم أن
+            // حقول النموذج نفسها أُعيد تهيئتها فعلياً لبيانات العنوان الجديد —
+            // فتبقى الخريطة معروضة على موقع العنوان *السابق*. key() يجبر إعادة
+            // إنشاء الخريطة بحالة نظيفة تطابق initialLatitude/initialLongitude
+            // الجديدة عند كل تبديل.
+            key(formKey) {
+                com.eleven.store.ui.components.LocationPicker(
+                    initialLatitude = latitude,
+                    initialLongitude = longitude,
+                    onLocationSelected = { lat, lng ->
+                        latitude = lat; longitude = lng
+                        showLocationError = false
+                    },
+                // ✅ إصلاح: دقة الجيوكودينغ العكسي محدودة، فحقل "العنوان
+                // التفصيلي" بقي حقلاً يدوياً بالكامل — المستخدم يكتبه بنفسه
+                // ولا تكتب الخريطة فوقه. تحريك الدبوس يحدّث الإحداثيات
+                // (latitude/longitude) فقط، وهي المصدر الحقيقي الوحيد لموقع
+                // التوصيل الفعلي بغض النظر عن نص العنوان.
+                // المدينة فقط تُعبَّأ تلقائياً كمساعدة عند أول تحديد، دون
+                // الكتابة فوق ما يكتبه المستخدم لاحقاً.
+                    onAddressResolved = { resolvedCity, _ ->
+                        if (resolvedCity.isNotBlank() && city.isBlank()) city = resolvedCity
+                    },
+                    onMapTouchChanged = onMapTouchChanged,
+                )
+            }
             if (showLocationError) {
                 Text(
                     "يجب تحديد موقعك على الخريطة (اسحب الخريطة أو اضغط زر موقعي الحالي) قبل الحفظ",

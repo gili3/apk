@@ -919,12 +919,12 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    // ✅ إصلاح حرج (انهيار فوري عند الحفظ): كانت هذه الدالة تستدعي
-    // repo.addAddress مباشرة بلا try/catch — أي استثناء (أشيعها: IOException
-    // من requireOnline() عند انقطاع شبكة لحظي، أو رفض Firestore) كان يمر بلا
-    // معالجة داخل coroutine الـviewModelScope فينهار التطبيق بالكامل فوراً
-    // بلا أي حفظ ولا أي رسالة للمستخدم. الآن يُلتقط ويُعرض كرسالة عبر نفس
-    // قناة addressesError المستخدمة أصلاً لأخطاء التحميل.
+    // ✅ إصلاح: نفس دوال الحفظ كانت تبتلع سبب الفشل الحقيقي بصمت تام — لا
+    // Log.e ولا CrashReporter (بعكس getAddresses وplaceOrder اللي عندهم
+    // تسجيل فعلي). فأي "تعذر حفظ العنوان" يظهر للمستخدم كان بلا أي أثر
+    // بالـLogcat أو Crashlytics يوضّح السبب الحقيقي (رفض قواعد أمان Firestore،
+    // App Check، أو أي شيء آخر غير مصنَّف كـconnectivity). الآن نسجّل
+    // الاستثناء الفعلي بكل مرة قبل تحويله لرسالة ودّية للمستخدم.
     fun addAddress(address: Address, onDone: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -932,6 +932,8 @@ class MainViewModel : ViewModel() {
                 loadAddresses()
                 onDone()
             } catch (e: Exception) {
+                Log.e("MainViewModel", "addAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "addAddress")
                 _addressesError.value = repo.friendlySaveError(e)
             }
         }
@@ -944,6 +946,8 @@ class MainViewModel : ViewModel() {
                 loadAddresses()
                 onDone()
             } catch (e: Exception) {
+                Log.e("MainViewModel", "updateAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "updateAddress")
                 _addressesError.value = repo.friendlySaveError(e)
             }
         }
@@ -955,6 +959,8 @@ class MainViewModel : ViewModel() {
                 repo.deleteAddress(id)
                 loadAddresses()
             } catch (e: Exception) {
+                Log.e("MainViewModel", "deleteAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "deleteAddress")
                 _addressesError.value = repo.friendlySaveError(e)
             }
         }

@@ -11,10 +11,11 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.input.pointer.motionEventSpy
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +76,7 @@ private fun reverseGeocode(
  * - onLocationSelected يُستدعى بكل تحريك للخريطة بإحداثيات مركزها الحالي.
  * - onAddressResolved يُستدعى بعنوان تقريبي (Geocoding عكسي مجاني) لتعبئة الحقول النصية.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun LocationPicker(
     initialLatitude: Double,
@@ -203,16 +205,25 @@ fun LocationPicker(
                 .fillMaxWidth()
                 .height(220.dp)
                 .clip(RoundedCornerShape(12.dp))
-                // ✅ راجع تعليق onMapTouchChanged بالأعلى — يمنع القائمة الأب
-                // (LazyColumn) من "سرقة" حركة الإصبع كتمرير للقائمة بدل سحب
-                // للخريطة، طوال مدة اللمس الفعلي داخل حدود الخريطة فقط.
-                .pointerInteropFilter { event ->
+                // ✅ إصلاح جذري لعطل "التنقل بالخريطة": راجع تعليق onMapTouchChanged
+                // بالأعلى — الهدف يبقى نفسه (تعطيل تمرير القائمة الأب أثناء لمس
+                // الخريطة)، لكن pointerInteropFilter كان يتدخّل فعلياً في توزيع
+                // أحداث اللمس على GoogleMap نفسها (المكوّنة داخلياً من AndroidView
+                // يغلّف SurfaceView) — فكانت حركة السحب (Pan) لا تصل كاملة أو
+                // بشكل متقطع لمستشعر الإيماءات الخاص بالخريطة، فتبقى isMoving لا
+                // تتحول أبداً لـtrue بشكل موثوق، وبالتالي hasMapMoved لا يُفعَّل
+                // ولا يُستدعى onLocationSelected إطلاقاً رغم تحريك المستخدم الفعلي
+                // للخريطة — هذا بالضبط سبب فشل الحفظ الدائم ("حدد موقعك على
+                // الخريطة" تظل تظهر حتى بعد السحب). motionEventSpy هي الأداة
+                // الرسمية بـCompose "للتجسس" على أحداث اللمس فقط دون أي تدخّل
+                // بتوزيعها — فتصل كل الأحداث كاملة وسليمة للخريطة، وتعمل حركة
+                // السحب بسلاسة طبيعية مع بقاء تعطيل تمرير القائمة الأب فعّالاً.
+                .motionEventSpy { event ->
                     when (event.actionMasked) {
                         android.view.MotionEvent.ACTION_DOWN -> onMapTouchChanged(true)
                         android.view.MotionEvent.ACTION_UP,
                         android.view.MotionEvent.ACTION_CANCEL -> onMapTouchChanged(false)
                     }
-                    false // لا تستهلك الحدث — مرّره للخريطة نفسها لتتعامل معه طبيعياً
                 },
         ) {
             GoogleMap(

@@ -114,9 +114,16 @@ class FirestoreRepository {
 
     // ✅ إصلاح (انهيار عند حفظ عنوان): نفس فكرة friendlyLoadError أعلاه، لكن
     // بصياغة مناسبة لعمليات الحفظ/التعديل وليس التحميل فقط.
-    fun friendlySaveError(e: Throwable): String =
-        if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
-        else "تعذّر حفظ العنوان، حاول مرة أخرى"
+    // ✅ إصلاح: أضيف تحقق IllegalStateException هنا خصيصاً لرسالة "انتهت
+    // جلستك" الجديدة بـaddAddress/updateAddress/deleteAddress — بدونه كانت
+    // ستُستبدَل تلقائياً بالرسالة العامة "تعذّر حفظ العنوان" مثل أي استثناء
+    // آخر غير مصنَّف، فيضيع السبب الحقيقي (انتهاء الجلسة) اللي يحتاجه
+    // المستخدم فعلاً ليعرف الحل (تسجيل الدخول من جديد).
+    fun friendlySaveError(e: Throwable): String = when {
+        isConnectivityFailure(e) -> "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+        e is IllegalStateException && !e.message.isNullOrBlank() -> e.message!!
+        else -> "تعذّر حفظ العنوان، حاول مرة أخرى"
+    }
 
     // ✅ إصلاح (تفاعل وهمي بلا إنترنت — سلة/مفضلة/طلب تبدو ناجحة بلا نت):
     // set()/update()/delete()/transaction على Firestore لا تفشل فوراً بلا
@@ -1107,9 +1114,15 @@ class FirestoreRepository {
         batch.commit().await()
     }
 
+    // ✅ إصلاح: `uid ?: return ""` سابقاً كان يتجاهل الحفظ بصمت تام لو انتهت
+    // صلاحية جلسة المستخدم أو انقطعت (uid == null) — الدالة ترجع بلا أي
+    // استثناء، فـMainViewModel.addAddress/updateAddress يعتبرها نجحت فعلاً
+    // (onDone() يُستدعى، النموذج يُغلق) بينما لا شيء كُتب بـFirestore إطلاقاً؛
+    // أخطر من ظهور رسالة خطأ — فقدان بيانات صامت يبدو للمستخدم كنجاح. الآن
+    // تُرمى استثناء واضح ليصل عبر friendlySaveError كرسالة حقيقية للمستخدم.
     suspend fun addAddress(address: Address): String {
         requireOnline()
-        val u = uid ?: return ""
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
         val ref = db.collection("users").document(u).collection("addresses").document()
         ref.set(address).await()
         if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = ref.id)
@@ -1118,14 +1131,14 @@ class FirestoreRepository {
 
     suspend fun updateAddress(addressId: String, address: Address) {
         requireOnline()
-        val u = uid ?: return
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
         db.collection("users").document(u).collection("addresses").document(addressId).set(address).await()
         if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = addressId)
     }
 
     suspend fun deleteAddress(addressId: String) {
         requireOnline()
-        val u = uid ?: return
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
         db.collection("users").document(u).collection("addresses").document(addressId).delete().await()
     }
 

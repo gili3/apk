@@ -258,6 +258,7 @@ fun CheckoutScreen(
                                 // الملف الشخصي أيضاً، بنفس منطق شاشة "حسابي".
                                 defaultFullName = (userProfile?.name?.ifBlank { null } ?: user?.displayName) ?: "",
                                 defaultPhone = userProfile?.phone ?: "",
+                                onCheckDeliveryZone = { lat, lng -> viewModel.isLocationInDeliveryZone(lat, lng) },
                             )
                             2 -> PaymentStepContent(
                                 storeSettings = storeSettings,
@@ -347,6 +348,7 @@ private fun AddressStepContent(
     onAddAddress: (Address, () -> Unit) -> Unit,
     defaultFullName: String = "",
     defaultPhone: String = "",
+    onCheckDeliveryZone: suspend (latitude: Double, longitude: Double) -> Boolean = { _, _ -> true },
 ) {
     // ✅ إصلاح: حالة عرض نموذج إضافة عنوان مباشرة داخل شاشة الدفع
     var showAddDialog by remember { mutableStateOf(false) }
@@ -371,6 +373,7 @@ private fun AddressStepContent(
                     }
                 },
                 onCancel = { if (!isSaving) showAddDialog = false },
+                onCheckDeliveryZone = onCheckDeliveryZone,
             )
         }
     }

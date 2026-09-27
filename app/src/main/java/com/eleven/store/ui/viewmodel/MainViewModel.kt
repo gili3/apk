@@ -880,6 +880,11 @@ class MainViewModel : ViewModel() {
     suspend fun uploadPaymentReceipt(context: android.content.Context, uri: android.net.Uri): String =
         repo.uploadPaymentReceipt(context, uri)
 
+    // ✅ جديد: راجع تعليق FirestoreRepository.isLocationInDeliveryZone — تحقق
+    // مبكر غير قاطع تستخدمه شاشة اختيار الموقع (AddressFormCard) مباشرة.
+    suspend fun isLocationInDeliveryZone(lat: Double, lng: Double): Boolean =
+        repo.isLocationInDeliveryZone(lat, lng)
+
     fun placeOrder(
         order: Order,
         clearCart: Boolean = true,  // ✅ false عند شراء الآن لحماية السلة

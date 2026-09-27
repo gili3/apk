@@ -423,6 +423,7 @@ fun ProfileScreen(
                             editingAddress = null
                         },
                         onMapTouchChanged = { mapTouched = it },
+                        onCheckDeliveryZone = { lat, lng -> viewModel.isLocationInDeliveryZone(lat, lng) },
                     )
                     }
                 }
@@ -558,6 +559,11 @@ fun AddressFormCard(
     // الدفع (CheckoutScreens.kt) لأن الاستدعاء هناك داخل Dialog منفصل بلا أي
     // قائمة أب يتنازعها.
     onMapTouchChanged: (touching: Boolean) -> Unit = {},
+    // ✅ جديد: تحقق مبكر من مناطق التوصيل فور تحريك الدبوس — راجع تعليق
+    // FirestoreRepository.isLocationInDeliveryZone. القيمة الافتراضية (تقبل
+    // أي موقع دائماً) موجودة فقط لسهولة المعاينة/الاختبار؛ كلا موضعَي
+    // الاستدعاء الفعليين (حسابي، الدفع) يمرّران viewModel.isLocationInDeliveryZone.
+    onCheckDeliveryZone: suspend (latitude: Double, longitude: Double) -> Boolean = { _, _ -> true },
 ) {
     // ✅ إصلاح: قائمة العناوين تبقى ظاهرة مع أزرار "تعديل" الخاصة بها حتى أثناء
     // فتح هذا النموذج (انظر مكان الاستدعاء بـProfileScreen) — لو ضغط المستخدم
@@ -580,6 +586,22 @@ fun AddressFormCard(
     // الإطلاق)، ما يُبطل أي فحص لاحق لمنطقة التوصيل مبنيّ فوق هذه الإحداثيات.
     var showLocationError by remember(formKey) { mutableStateOf(false) }
     val hasLocation = latitude != 0.0 || longitude != 0.0
+
+    // ✅ جديد: نتيجة التحقق من نطاق التوصيل للموقع الحالي — null تعني "لم
+    // يُتحقق بعد أو التحقق جارٍ حالياً"، وليس "مقبول"، حتى لا يُسمح بالحفظ
+    // قبل اكتمال التحقق الفعلي فعلاً (راجع شرط زر "حفظ" بالأسفل).
+    var zoneCheckState by remember(formKey) { mutableStateOf<Boolean?>(null) }
+    var isCheckingZone by remember(formKey) { mutableStateOf(false) }
+
+    LaunchedEffect(formKey, latitude, longitude) {
+        if (hasLocation) {
+            isCheckingZone = true
+            zoneCheckState = onCheckDeliveryZone(latitude, longitude)
+            isCheckingZone = false
+        } else {
+            zoneCheckState = null
+        }
+    }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -676,6 +698,22 @@ fun AddressFormCard(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            // ✅ جديد: نتيجة التحقق من نطاق التوصيل — تظهر فور تحديد موقع
+            // ليعرف المستخدم فوراً لو موقعه خارج النطاق المعتمد، بدل اكتشاف
+            // ذلك بعد تعبئة كل خطوات الدفع.
+            if (hasLocation && isCheckingZone) {
+                Text(
+                    "جارٍ التحقق من نطاق التوصيل…",
+                    fontSize = 11.sp,
+                    color = MutedForeground,
+                )
+            } else if (hasLocation && zoneCheckState == false) {
+                Text(
+                    "عذراً، هذا الموقع يقع خارج مناطق التوصيل المتاحة حالياً — الرجاء تحديد موقع آخر",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
 
             // Checkbox
             Row(
@@ -705,10 +743,14 @@ fun AddressFormCard(
                         if (fullName.isNotBlank() && phone.isNotBlank() &&
                             city.isNotBlank() && address.isNotBlank()
                         ) {
-                            if (!hasLocation) {
-                                showLocationError = true
-                            } else {
-                                onSave(fullName, phone, city, address, isDefault, latitude, longitude)
+                            when {
+                                !hasLocation -> showLocationError = true
+                                // ✅ جديد: لا نسمح بالحفظ إلا بعد تأكيد صريح (true) أن
+                                // الموقع داخل نطاق التوصيل — لا أثناء التحقق (null) ولا
+                                // لو تأكّد أنه خارجه (false). رسالة الحالة المناسبة
+                                // ظاهرة أصلاً فوق هذا الزر بالحالتين.
+                                zoneCheckState != true -> {}
+                                else -> onSave(fullName, phone, city, address, isDefault, latitude, longitude)
                             }
                         }
                     },

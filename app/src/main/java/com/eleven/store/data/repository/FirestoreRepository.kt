@@ -1246,34 +1246,63 @@ class FirestoreRepository {
     // الدفاع الحقيقي غير القابل للتجاوز يبقى firestore.rules (bbox تقريبي)
     // + السيرفر (delivery-zone-service.ts، مضلّع دقيق، لمسار الموقع). نفس
     // مبدأ evaluateCoupon أعلاه: تكرار مقصود للتحقق، وليس اعتماداً عليه فقط.
-    private suspend fun assertWithinDeliveryZone(address: Address?) {
+    // ✅ إصلاح: استُخرجت قراءة/تحليل مناطق التوصيل الفعّالة إلى دالة مشتركة
+    // بدل تكرارها — يستخدمها كل من assertWithinDeliveryZone (تحقق نهائي قاطع
+    // عند تأكيد الطلب) وisLocationInDeliveryZone الجديدة أدناه (تحقق مبكر غير
+    // قاطع من واجهة اختيار الموقع بالخريطة). null = تعذّر القراءة (لا نمنع
+    // بسبب هذا وحده)، قائمة فارغة = الميزة غير مفعّلة أصلاً (لا مناطق محفوظة
+    // أو كلها معطّلة)، غير ذلك = مضلّعات المناطق الفعّالة.
+    private suspend fun getActiveDeliveryZonePolygons(): List<List<Pair<Double, Double>>>? {
         val zonesDoc = try {
             db.collection("settings").document("deliveryZones").get().await()
         } catch (e: Exception) {
-            return // تعذّر القراءة (غالباً بلا اتصال مؤقت أثناء الانتقال) — لا نمنع الطلب بسبب هذا وحده
+            return null // تعذّر القراءة (غالباً بلا اتصال مؤقت أثناء الانتقال)
         }
         @Suppress("UNCHECKED_CAST")
         val zonesRaw = zonesDoc.get("zones") as? List<Map<String, Any?>> ?: emptyList()
         val activeZones = zonesRaw.filter { it["isActive"] == true }
-        if (activeZones.isEmpty()) return // الميزة غير مفعّلة أصلاً (لا مناطق محفوظة، أو كلها معطّلة)
-
-        if (address == null || !address.hasLocation) {
-            throw IllegalStateException("يجب تحديد موقعك على الخريطة لإتمام الطلب — عنوانك خارج نطاق مناطق التوصيل المتاحة")
-        }
-
-        val insideAnyZone = activeZones.any { zone ->
+        if (activeZones.isEmpty()) return emptyList()
+        return activeZones.map { zone ->
             @Suppress("UNCHECKED_CAST")
-            val polygon = (zone["polygon"] as? List<Map<String, Any?>>)
+            (zone["polygon"] as? List<Map<String, Any?>>)
                 ?.mapNotNull { pt ->
                     val lat = (pt["lat"] as? Number)?.toDouble()
                     val lng = (pt["lng"] as? Number)?.toDouble()
                     if (lat != null && lng != null) lat to lng else null
                 } ?: emptyList()
+        }
+    }
+
+    private suspend fun assertWithinDeliveryZone(address: Address?) {
+        val polygons = getActiveDeliveryZonePolygons() ?: return
+        if (polygons.isEmpty()) return // الميزة غير مفعّلة أصلاً
+
+        if (address == null || !address.hasLocation) {
+            throw IllegalStateException("يجب تحديد موقعك على الخريطة لإتمام الطلب — عنوانك خارج نطاق مناطق التوصيل المتاحة")
+        }
+
+        val insideAnyZone = polygons.any { polygon ->
             polygon.size >= 3 && isPointInPolygon(address.latitude, address.longitude, polygon)
         }
         if (!insideAnyZone) {
             throw IllegalStateException("عذراً، موقع التوصيل الذي حدّدته يقع خارج مناطق التوصيل المعتمدة حالياً")
         }
+    }
+
+    /**
+     * ✅ جديد: تحقق مبكر غير قاطع (لا يرمي استثناء) يُستدعى مباشرة من نموذج
+     * اختيار العنوان (AddressFormCard) فور تحريك دبوس الخريطة — بدل ترك
+     * المستخدم يُكمل كل خطوات الدفع ليُفاجأ برفض الطلب بالنهاية فقط. يُرجع
+     * true لو الموقع مقبول (داخل منطقة فعّالة، أو الميزة غير مفعّلة أصلاً، أو
+     * تعذّر التحقق مؤقتاً)، وfalse فقط لو تأكّدنا أن هناك مناطق توصيل فعّالة
+     * وأن هذا الموقع بالذات يقع خارجها جميعاً. الخط الدفاعي غير القابل
+     * للتجاوز يبقى دائماً assertWithinDeliveryZone أعلاه (عند placeOrder)
+     * بالإضافة لتحقق مطابق تماماً على السيرفر (delivery-zone-service.ts).
+     */
+    suspend fun isLocationInDeliveryZone(lat: Double, lng: Double): Boolean {
+        val polygons = getActiveDeliveryZonePolygons() ?: return true
+        if (polygons.isEmpty()) return true
+        return polygons.any { polygon -> polygon.size >= 3 && isPointInPolygon(lat, lng, polygon) }
     }
 
     // خوارزمية Ray Casting القياسية — نفس منطق shared/deliveryZones.ts::isPointInPolygon بالضبط

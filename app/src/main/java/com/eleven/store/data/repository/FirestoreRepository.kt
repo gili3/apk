@@ -112,6 +112,12 @@ class FirestoreRepository {
         if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
         else "تعذّر تحميل المنتجات، حاول مرة أخرى"
 
+    // ✅ إصلاح (انهيار عند حفظ عنوان): نفس فكرة friendlyLoadError أعلاه، لكن
+    // بصياغة مناسبة لعمليات الحفظ/التعديل وليس التحميل فقط.
+    fun friendlySaveError(e: Throwable): String =
+        if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+        else "تعذّر حفظ العنوان، حاول مرة أخرى"
+
     // ✅ إصلاح (تفاعل وهمي بلا إنترنت — سلة/مفضلة/طلب تبدو ناجحة بلا نت):
     // set()/update()/delete()/transaction على Firestore لا تفشل فوراً بلا
     // اتصال؛ فبفضل الكاش الدائم (configureFirestoreCache) تُكتب محلياً وتبقى

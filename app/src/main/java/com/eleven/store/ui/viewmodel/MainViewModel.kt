@@ -756,8 +756,17 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ إصلاح (نفس فئة انهيار addAddress): بلا try/catch، أي استثناء (أشيعه
+    // IOException من requireOnline() عند انقطاع شبكة لحظي) كان ينهار التطبيق
+    // بالكامل عند مجرد حذف عنصر من السلة.
     fun removeFromCart(productId: String) {
-        viewModelScope.launch { repo.removeFromCart(productId) }
+        viewModelScope.launch {
+            try {
+                repo.removeFromCart(productId)
+            } catch (e: Exception) {
+                _cartError.value = repo.friendlySaveError(e)
+            }
+        }
     }
 
     fun updateCartQuantity(item: CartItem, delta: Int, onResult: ((Boolean, String?) -> Unit)? = null) {
@@ -779,10 +788,24 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun clearCart() { viewModelScope.launch { repo.clearCart() } }
+    fun clearCart() {
+        viewModelScope.launch {
+            try {
+                repo.clearCart()
+            } catch (e: Exception) {
+                _cartError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
 
     fun toggleFavorite(productId: String) {
-        viewModelScope.launch { repo.toggleFavorite(productId) }
+        viewModelScope.launch {
+            try {
+                repo.toggleFavorite(productId)
+            } catch (e: Exception) {
+                _favoritesError.value = repo.friendlySaveError(e)
+            }
+        }
     }
 
     // ✅ جديد (توحيد سلوك الإشعارات): يميّز "لا يزال يحمّل" عن "الطلب فعلاً
@@ -896,26 +919,44 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ إصلاح حرج (انهيار فوري عند الحفظ): كانت هذه الدالة تستدعي
+    // repo.addAddress مباشرة بلا try/catch — أي استثناء (أشيعها: IOException
+    // من requireOnline() عند انقطاع شبكة لحظي، أو رفض Firestore) كان يمر بلا
+    // معالجة داخل coroutine الـviewModelScope فينهار التطبيق بالكامل فوراً
+    // بلا أي حفظ ولا أي رسالة للمستخدم. الآن يُلتقط ويُعرض كرسالة عبر نفس
+    // قناة addressesError المستخدمة أصلاً لأخطاء التحميل.
     fun addAddress(address: Address, onDone: () -> Unit) {
         viewModelScope.launch {
-            repo.addAddress(address)
-            loadAddresses()
-            onDone()
+            try {
+                repo.addAddress(address)
+                loadAddresses()
+                onDone()
+            } catch (e: Exception) {
+                _addressesError.value = repo.friendlySaveError(e)
+            }
         }
     }
 
     fun updateAddress(id: String, address: Address, onDone: () -> Unit) {
         viewModelScope.launch {
-            repo.updateAddress(id, address)
-            loadAddresses()
-            onDone()
+            try {
+                repo.updateAddress(id, address)
+                loadAddresses()
+                onDone()
+            } catch (e: Exception) {
+                _addressesError.value = repo.friendlySaveError(e)
+            }
         }
     }
 
     fun deleteAddress(id: String) {
         viewModelScope.launch {
-            repo.deleteAddress(id)
-            loadAddresses()
+            try {
+                repo.deleteAddress(id)
+                loadAddresses()
+            } catch (e: Exception) {
+                _addressesError.value = repo.friendlySaveError(e)
+            }
         }
     }
 

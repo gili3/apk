@@ -83,6 +83,9 @@ jobs:
         # and variables → Actions إن لم يكونا موجودين مسبقاً.
         ALGOLIA_APP_ID: ${{ secrets.ALGOLIA_APP_ID }}
         ALGOLIA_SEARCH_API_KEY: ${{ secrets.ALGOLIA_SEARCH_API_KEY }}
+        # ✅ إصلاح: كان مفقوداً هنا — بدونه يصل فارغاً دائماً لبيئة CI (نفس
+        # سبب مشكلة Algolia السابقة)، فتُبنى نسخة الإصدار بخريطة معطّلة.
+        MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
       run: ./gradlew assembleRelease bundleRelease
 
     - name: Remove decoded keystore

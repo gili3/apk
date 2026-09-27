@@ -197,7 +197,11 @@ fun LocationPicker(
                     zoomControlsEnabled = false,
                     myLocationButtonEnabled = false,
                 ),
-                onMapClick = { latLng -> onLocationSelected(latLng.latitude, latLng.longitude) },
+                onMapClick = { latLng ->
+                    scope.launch {
+                        cameraPositionState.animate(CameraUpdateFactory.newLatLng(latLng))
+                    }
+                },
             )
 
             // دبوس ثابت بمنتصف الخريطة — يمثّل نقطة التوصيل الحالية

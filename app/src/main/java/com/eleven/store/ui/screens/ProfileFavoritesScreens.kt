@@ -69,6 +69,9 @@ fun ProfileScreen(
     var editingAddress by remember { mutableStateOf<Address?>(null) }
     // ✅ جديد: حذف العنوان كان فورياً بلا تأكيد — الآن نافذة تأكيد قبل الحذف.
     var addressToDelete by remember { mutableStateOf<Address?>(null) }
+    // ✅ جديد: راجع تعليق onMapTouchChanged بـLocationPicker.kt — يعطّل تمرير
+    // هذه القائمة (LazyColumn) طوال مدة سحب المستخدم لخريطة اختيار الموقع.
+    var mapTouched by remember { mutableStateOf(false) }
 
     // ── تعديل الاسم ورقم الهاتف ──
     var isEditingInfo by remember { mutableStateOf(false) }
@@ -141,6 +144,7 @@ fun ProfileScreen(
         },
     ) { padding ->
         LazyColumn(
+            userScrollEnabled = !mapTouched,
             contentPadding = PaddingValues(
                 start = 20.dp, end = 20.dp,
                 top = padding.calculateTopPadding() + 8.dp,
@@ -418,6 +422,7 @@ fun ProfileScreen(
                             showForm = false
                             editingAddress = null
                         },
+                        onMapTouchChanged = { mapTouched = it },
                     )
                     }
                 }
@@ -548,6 +553,11 @@ fun AddressFormCard(
     // الشحن قد يكون لمستلم مختلف عمداً.
     defaultFullName: String = "",
     defaultPhone: String = "",
+    // ✅ جديد: يُمرَّر مباشرة لـLocationPicker، ثم لأعلى (ProfileScreen) لتعطيل
+    // تمرير قائمة العناوين أثناء سحب المستخدم للخريطة. لا تأثير له في شاشة
+    // الدفع (CheckoutScreens.kt) لأن الاستدعاء هناك داخل Dialog منفصل بلا أي
+    // قائمة أب يتنازعها.
+    onMapTouchChanged: (touching: Boolean) -> Unit = {},
 ) {
     // ✅ إصلاح: قائمة العناوين تبقى ظاهرة مع أزرار "تعديل" الخاصة بها حتى أثناء
     // فتح هذا النموذج (انظر مكان الاستدعاء بـProfileScreen) — لو ضغط المستخدم
@@ -638,10 +648,15 @@ fun AddressFormCard(
                     latitude = lat; longitude = lng
                     showLocationError = false
                 },
+                // ✅ إصلاح: كانت تُعبَّأ فقط لو الحقل فارغاً، فيمكن أن يبقى نص
+                // مكتوب يدوياً غير مطابق لموقع الدبوس الفعلي بعد تحريكه. الآن
+                // الخريطة هي مصدر الحقيقة: أي تحريك للدبوس يحدّث النص دائماً
+                // ليطابق الموقع الفعلي على الخريطة.
                 onAddressResolved = { resolvedCity, resolvedLine ->
-                    if (city.isBlank() && resolvedCity.isNotBlank()) city = resolvedCity
-                    if (address.isBlank() && resolvedLine.isNotBlank()) address = resolvedLine
+                    if (resolvedCity.isNotBlank()) city = resolvedCity
+                    if (resolvedLine.isNotBlank()) address = resolvedLine
                 },
+                onMapTouchChanged = onMapTouchChanged,
             )
             if (showLocationError) {
                 Text(

@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -80,10 +81,18 @@ fun LocationPicker(
     initialLongitude: Double,
     onLocationSelected: (latitude: Double, longitude: Double) -> Unit,
     modifier: Modifier = Modifier,
-    // ✅ جديد: يُستدعى بعنوان نصي تقريبي (حي/مدينة) بعد Geocoding عكسي —
-    // اختياري، يُستخدم لتعبئة حقلي "المدينة"/"العنوان" تلقائياً لو كانا
-    // فارغين فقط (بدون الكتابة فوق ما كتبه المستخدم بنفسه)
+    // ✅ الخريطة الآن هي مصدر الحقيقة الوحيد لموقع/وصف العنوان: يُستدعى بعنوان
+    // نصي دقيق (حي/شارع) بعد Geocoding عكسي في كل مرة يتحرّك فيها الدبوس —
+    // ويُستخدم لتعبئة حقلي "المدينة"/"العنوان" دائماً (وليس فقط عند كونهما
+    // فارغين كما كان سابقاً)، حتى يبقى النص المكتوب مطابقاً لموقع الدبوس
+    // الفعلي دوماً بدل احتمال تعارضهما.
     onAddressResolved: (city: String, addressLine: String) -> Unit = { _, _ -> },
+    // ✅ جديد: يُستدعى بـtrue عند بدء لمس المستخدم للخريطة وbfalse عند تركها —
+    // يُستخدم بالشاشة الأب لتعطيل تمرير القائمة (LazyColumn) مؤقتاً أثناء ذلك.
+    // بدونه، سحب المستخدم للخريطة (للتحرك يميناً/يساراً) كان يُفسَّر غالباً
+    // كتمرير للقائمة المحيطة بدل تحريك الخريطة نفسها — فتبقى الخريطة شبه
+    // ثابتة ولا يعمل إلا التكبير/التصغير (بإصبعين) والنقر المباشر.
+    onMapTouchChanged: (touching: Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -110,6 +119,12 @@ fun LocationPicker(
     var permissionDeniedMessage by remember { mutableStateOf<String?>(null) }
     var permanentlyDenied by remember { mutableStateOf(false) }
     val activity = context as? android.app.Activity
+
+    // ✅ شبكة أمان: لو غادرت الشاشة (تعديل عنوان آخر مثلاً) أثناء لمس الخريطة
+    // فعلياً، نضمن عدم بقاء تمرير القائمة الأب معطّلاً للأبد.
+    DisposableEffect(Unit) {
+        onDispose { onMapTouchChanged(false) }
+    }
 
     // يُنشئ عميل الموقع مرة واحدة
     val fusedLocationClient = remember {
@@ -187,7 +202,18 @@ fun LocationPicker(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(220.dp)
-                .clip(RoundedCornerShape(12.dp)),
+                .clip(RoundedCornerShape(12.dp))
+                // ✅ راجع تعليق onMapTouchChanged بالأعلى — يمنع القائمة الأب
+                // (LazyColumn) من "سرقة" حركة الإصبع كتمرير للقائمة بدل سحب
+                // للخريطة، طوال مدة اللمس الفعلي داخل حدود الخريطة فقط.
+                .pointerInteropFilter { event ->
+                    when (event.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN -> onMapTouchChanged(true)
+                        android.view.MotionEvent.ACTION_UP,
+                        android.view.MotionEvent.ACTION_CANCEL -> onMapTouchChanged(false)
+                    }
+                    false // لا تستهلك الحدث — مرّره للخريطة نفسها لتتعامل معه طبيعياً
+                },
         ) {
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),

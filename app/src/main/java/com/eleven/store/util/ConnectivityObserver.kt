@@ -52,8 +52,16 @@ fun isDeviceOnline(context: Context): Boolean {
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
     val network = connectivityManager.activeNetwork ?: return false
     val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    // ✅ إصلاح (حفظ يفشل باستمرار رغم وجود إنترنت فعلي يعمل): NET_CAPABILITY_VALIDATED
+    // يعتمد على نجاح Android بالوصول لخوادم فحص جوجل تحديداً (ping داخلي)، وهذا
+    // يفشل أو يتأخر كثيراً على بعض الشبكات (شبكات شركات/جامعات ذات جدار حماية،
+    // DNS مخصص، أو حتى بعض شبكات الجوال) رغم أن الإنترنت الفعلي (والوصول لخوادم
+    // Firebase تحديداً) يعمل تماماً — فكانت كل عملية حفظ تُرفض بصمت من هذا الفحص
+    // نفسه قبل ما تصل حتى لمحاولة الاتصال الفعلي. الاكتفاء بـNET_CAPABILITY_INTERNET
+    // (الشبكة النشطة *مصمَّمة* لتوفير إنترنت) كافٍ هنا؛ أي فشل اتصال حقيقي متبقٍ
+    // (شبكة مقطوعة فعلياً) يُلتقط لاحقاً بمعالجة NoInternet/timeout الموجودة أصلاً
+    // بكل عملية كتابة.
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
 }
 
 /** يرجع Flow<Boolean> يصدر true/false كلما تغيّرت حالة الاتصال الفعلية بالشبكة (لا مجرد "مسجَّل بشبكة" بل بها إنترنت فعلي قابل للتحقق) */

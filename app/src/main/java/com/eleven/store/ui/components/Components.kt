@@ -254,10 +254,11 @@ fun ElevenButton(
 fun OrderStatusBadge(status: com.eleven.store.data.model.OrderStatus) {
     val bg = when (status) {
         com.eleven.store.data.model.OrderStatus.DELIVERED -> OrderStatusColors.DeliveredBg
-        com.eleven.store.data.model.OrderStatus.PENDING -> OrderStatusColors.PendingBg
-        com.eleven.store.data.model.OrderStatus.SHIPPED -> OrderStatusColors.ShippedBg
+        com.eleven.store.data.model.OrderStatus.UNDER_REVIEW -> OrderStatusColors.UnderReviewBg
+        com.eleven.store.data.model.OrderStatus.OUT_FOR_DELIVERY -> OrderStatusColors.OutForDeliveryBg
         com.eleven.store.data.model.OrderStatus.CANCELLED -> OrderStatusColors.CancelledBg
-        com.eleven.store.data.model.OrderStatus.PAID -> OrderStatusColors.PaidBg
+        com.eleven.store.data.model.OrderStatus.PROCESSING -> OrderStatusColors.ProcessingBg
+        com.eleven.store.data.model.OrderStatus.PAYMENT_FAILED -> OrderStatusColors.PaymentFailedBg
     }
     val fg = OrderStatusColors.Foreground
     Box(

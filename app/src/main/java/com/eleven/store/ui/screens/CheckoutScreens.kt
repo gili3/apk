@@ -302,7 +302,7 @@ fun CheckoutScreen(
                                                     total = finalTotal,
                                                     subtotal = orderTotal,
                                                     shippingCost = shippingCost,
-                                                    status = OrderStatus.PENDING,
+                                                    status = OrderStatus.UNDER_REVIEW,
                                                     shippingAddress = selectedAddress,
                                                     paymentMethod = "bank_transfer",
                                                     paymentReceipt = receiptUrl,

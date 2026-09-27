@@ -81,16 +81,18 @@ val Info      = StateBlue
 val InfoBg    = StateBlueBg
 
 // ── ألوان حالات الطلب — قيم Hex ثابتة ومطلوبة حرفياً ──────────────
-// النظام: انتظار=رمادي / دفع=أخضر / توصيل=برتقالي / تسليم=أزرق / إلغاء=أحمر
-// ✅ ألوان مصمتة قوية (لا تظليل باهت) لتمييز حالة الطلب بوضوح فوري —
-// نفس القيم الحرفية في الموقع (client/src/lib/colors.ts → ORDER_STATUS_COLORS)
+// ✅ إعادة تنظيم: حالة طلب واحدة موحّدة بستّ حالات بدل status/paymentStatus
+// منفصلين — نفس القيم الحرفية في الموقع (client/src/lib/colors.ts →
+// ORDER_STATUS_COLORS)، بنفس الترتيب:
+// مراجعة=رمادي / تجهيز=أزرق / توصيل=برتقالي / تسليم=أخضر / إلغاء=أحمر / فشل دفع=عنّابي
 object OrderStatusColors {
-    val PendingBg   = Color(0xFF475569)
-    val PaidBg      = Color(0xFF16A34A)
-    val ShippedBg   = Color(0xFFEA580C)
-    val DeliveredBg = Color(0xFF2563EB)
-    val CancelledBg = Color(0xFFDC2626)
-    val Foreground  = Color(0xFFFFFFFF)
+    val UnderReviewBg    = Color(0xFF475569)
+    val ProcessingBg     = Color(0xFF2563EB)
+    val OutForDeliveryBg = Color(0xFFEA580C)
+    val DeliveredBg      = Color(0xFF16A34A)
+    val CancelledBg      = Color(0xFFDC2626)
+    val PaymentFailedBg  = Color(0xFF9F1239)
+    val Foreground       = Color(0xFFFFFFFF)
 }
 
 // ── أدوار واجهة (Semantic UI roles - LIGHT) ──────────────────────

@@ -131,8 +131,7 @@ data class Order(
     val shippingCost: Double = 0.0,
     val discount: Double = 0.0,
     val couponCode: String? = null,
-    val status: OrderStatus = OrderStatus.PENDING,
-    val paymentStatus: String = "unpaid",
+    val status: OrderStatus = OrderStatus.UNDER_REVIEW,
     val shippingAddress: Address? = null,   // ← نفس اسم الحقل في الموقع (shippingAddress)، بدل address
     val paymentMethod: String = "",
     val paymentReceipt: String = "",
@@ -141,16 +140,23 @@ data class Order(
     val createdAt: Timestamp? = null,
 )
 
+// ✅ إعادة تنظيم جذرية: كانت حالة الطلب (OrderStatus) وحالة الدفع
+// (paymentStatus كنص منفصل) حقلين مستقلّين تماماً بنفس الطلب — الآن حقل
+// status واحد فقط بستّ حالات تمثّل دورة حياة الطلب كاملة (بما فيها فشل
+// الدفع). نفس القيم الست حرفياً بالموقع/لوحة التحكم
+// (panel/shared/types.ts::OrderStatus) وبنفس الألوان
+// (ui/theme/Theme.kt::OrderStatusColors).
 enum class OrderStatus(val label: String) {
-    PENDING("قيد الانتظار"),
-    PAID("تم الدفع"),
-    SHIPPED("خرج للتوصيل"),
+    UNDER_REVIEW("قيد المراجعة"),
+    PROCESSING("قيد التجهيز"),
+    OUT_FOR_DELIVERY("قيد التوصيل"),
     DELIVERED("تم التسليم"),
-    CANCELLED("ملغى");
+    CANCELLED("ملغي"),
+    PAYMENT_FAILED("دفع فاشل");
 
     companion object {
         fun from(value: String): OrderStatus =
-            entries.find { it.name.lowercase() == value.lowercase() } ?: PENDING
+            entries.find { it.name.lowercase() == value.lowercase() } ?: UNDER_REVIEW
     }
 }
 

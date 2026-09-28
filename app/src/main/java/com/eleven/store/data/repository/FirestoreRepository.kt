@@ -140,6 +140,23 @@ class FirestoreRepository {
         }
     }
 
+    // ✅ (Audit الأمان/الموثوقية) بديل صريح عن `uid ?: return` الصامت: عند انتهاء
+    // الجلسة كانت عمليات السلة تنتهي بلا أي تنفيذ ثم تُبلَّغ للواجهة كنجاح
+    // ("تمت الإضافة") لأن الدالة تعود بلا استثناء. الآن ترمي رسالة واضحة.
+    private fun requireUid(): String =
+        uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
+
+    // ✅ (Audit) كتابة Firestore/Storage غير المعاملاتية قد تبقى "معلّقة" بلا نهاية إن
+    // انقطعت الشبكة بعد requireOnline() (Task لا يكتمل إلا بتأكيد السيرفر). مهلة
+    // صريحة تحوّل التعليق إلى خطأ واضح بدل دوّامة تحميل أبدية. لا نستخدمها لـplaceOrder
+    // عمداً: مهلة هناك قد تُظهر فشلاً بينما الطلب اكتمل فعلاً (تكرار طلب).
+    private suspend fun <T> withNetworkTimeout(millis: Long = 20_000L, block: suspend () -> T): T =
+        try {
+            kotlinx.coroutines.withTimeout(millis) { block() }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            throw IOException("انتهت مهلة الاتصال. تحقق من اتصالك وحاول مرة أخرى")
+        }
+
     // ✅ جديد (Pagination/Infinite Scroll): قناة جانبية تحمل معلومات الصفحة
     // التالية بعد كل استدعاء لـgetProducts — بنفس أسلوب lastProductsError
     // أعلاه بدل تغيير توقيع الدالة (تفادياً لكسر الاستدعاءات الحالية
@@ -909,11 +926,12 @@ class FirestoreRepository {
     // ✅ يتحقق من المخزون ولا يسمح بتجاوزه عند الإضافة للسلة (مطابق لمنطق السيرفر في الموقع)
     suspend fun addToCart(item: CartItem) {
         requireOnline()
-        val u = uid ?: return
+        val u = requireUid()
+        if (item.quantity <= 0) throw IllegalStateException("الكمية غير صالحة")
         val cartRef = db.collection("users").document(u).collection("cart").document(item.productId)
         val productRef = db.collection("products").document(item.productId)
 
-        db.runTransaction { tx ->
+        withNetworkTimeout { db.runTransaction<Void?> { tx ->
             val productSnap = tx.get(productRef)
             if (!productSnap.exists() || productSnap.getBoolean("isActive") == false) {
                 throw IllegalStateException("هذا المنتج لم يعد متوفراً")
@@ -937,20 +955,22 @@ class FirestoreRepository {
                 tx.set(cartRef, item.copy(id = item.productId, quantity = requestedQty.toInt()))
             }
             null
-        }.await()
+        }.await() }
     }
 
     suspend fun removeFromCart(productId: String) {
         requireOnline()
-        val u = uid ?: return
-        db.collection("users").document(u).collection("cart").document(productId).delete().await()
+        val u = requireUid()
+        withNetworkTimeout {
+            db.collection("users").document(u).collection("cart").document(productId).delete().await()
+        }
     }
 
     // ✅ تعديل الكمية من السلة فقط، مقيّداً بالكمية المتوفرة في المخزون
     // يعيد true إذا تم تقييد الكمية بحد المخزون (capped) — مطابق لاستجابة updateCartQuantity في الموقع
     suspend fun updateQuantity(productId: String, newQty: Int): Boolean {
         requireOnline()
-        val u = uid ?: return false
+        val u = requireUid()
         val productSnap = db.collection("products").document(productId).get().await()
         val stock = productSnap.getLong("stock") ?: 0L
         if (stock <= 0) {
@@ -959,19 +979,23 @@ class FirestoreRepository {
         }
         val capped = newQty.toLong() > stock
         val finalQty = minOf(newQty.toLong(), stock)
-        db.collection("users").document(u).collection("cart")
-            .document(productId)
-            .update("quantity", finalQty).await()
+        withNetworkTimeout {
+            db.collection("users").document(u).collection("cart")
+                .document(productId)
+                .update("quantity", finalQty).await()
+        }
         return capped
     }
 
     suspend fun clearCart() {
         requireOnline()
-        val u = uid ?: return
-        val batch = db.batch()
-        val items = db.collection("users").document(u).collection("cart").get().await()
-        items.documents.forEach { batch.delete(it.reference) }
-        batch.commit().await()
+        val u = requireUid()
+        withNetworkTimeout {
+            val batch = db.batch()
+            val items = db.collection("users").document(u).collection("cart").get().await()
+            items.documents.forEach { batch.delete(it.reference) }
+            batch.commit().await()
+        }
     }
 
     // ─── Favorites ──────────────────────────────────────────────
@@ -1047,7 +1071,7 @@ class FirestoreRepository {
 
     suspend fun toggleFavorite(productId: String): Boolean {
         requireOnline()
-        val u = uid ?: return false
+        val u = requireUid()
         val ref = db.collection("users").document(u).collection("favorites").document(productId)
         val doc = ref.get().await()
         return if (doc.exists()) {
@@ -1153,9 +1177,22 @@ class FirestoreRepository {
         val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لرفع إيصال الدفع")
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("تعذر قراءة صورة الإيصال المختارة")
+        // ✅ (Audit) تحقق مسبق بدل انتظار رفض قواعد Storage الغامض (permission-denied):
+        // الحد 10MB مطابق لـstorage.rules، وناقل المحتوى يُحدَّد صراحةً لأن القاعدة
+        // تشترط image/(jpeg|png|webp|gif) — رفع بلا نوع محتوى يُرفض بصمت مربك للمستخدم.
+        if (bytes.isEmpty()) throw IllegalStateException("صورة الإيصال فارغة، اختر صورة أخرى")
+        if (bytes.size > 10 * 1024 * 1024) {
+            throw IllegalStateException("حجم صورة الإيصال كبير جداً (الحد الأقصى 10MB)")
+        }
+        val mime = context.contentResolver.getType(uri)
+            ?.takeIf { it in setOf("image/jpeg", "image/png", "image/webp", "image/gif") }
+            ?: "image/jpeg"
+        val meta = com.google.firebase.storage.StorageMetadata.Builder().setContentType(mime).build()
         val ref = storage.reference.child("receipts/$u/${System.currentTimeMillis()}.jpg")
-        ref.putBytes(bytes).await()
-        return ref.downloadUrl.await().toString()
+        return withNetworkTimeout(90_000L) {
+            ref.putBytes(bytes, meta).await()
+            ref.downloadUrl.await().toString()
+        }
     }
 
     suspend fun getOrders(): List<Order> {
@@ -1322,6 +1359,15 @@ class FirestoreRepository {
     suspend fun placeOrder(order: Order, couponCode: String? = null): String {
         requireOnline()
         val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
+        // ✅ (Audit) فحص مبكر بلا شبكة: كمية غير موجبة أو منتج مكرَّر بسطرين. التكرار
+        // خطير داخل المعاملة لأن كل سطر يقرأ نفس لقطة المخزون فيُكتب آخرهما فقط
+        // (بيع أكثر من المتوفر). القواعد ترفض الكمية ≤ 0 أصلاً، لكن هنا رسالة واضحة.
+        if (order.items.isEmpty() ||
+            order.items.any { it.quantity <= 0 } ||
+            order.items.map { it.productId }.distinct().size != order.items.size
+        ) {
+            throw IllegalStateException("بيانات الطلب غير صالحة، حدّث السلة وحاول مرة أخرى")
+        }
         assertWithinDeliveryZone(order.shippingAddress)
         val ref = db.collection("orders").document()
         val verificationToken = java.util.UUID.randomUUID().toString().replace("-", "").take(26)

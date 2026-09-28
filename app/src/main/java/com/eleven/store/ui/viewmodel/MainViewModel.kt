@@ -894,7 +894,17 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val id = repo.placeOrder(order, if (useCoupon) appliedCouponCode else null)
-                if (clearCart) repo.clearCart()  // ✅ لا تمسح السلة عند شراء الآن
+                // ✅ (Audit) الطلب أُنشئ فعلياً عند هذه النقطة. سابقاً كان فشل تفريغ السلة
+                // (انقطاع شبكة لحظي) يقع بنفس try فيُعرض للمستخدم كـ"فشل الطلب" رغم نجاحه،
+                // فيعيد المحاولة ويتكرّر الطلب (خصم مخزون وإيصال مضاعف). الآن أي فشل تنظيفي
+                // بعد النجاح يُبلَّغ منفصلاً ولا يغيّر نتيجة الطلب.
+                if (clearCart) {  // ✅ لا تمسح السلة عند شراء الآن
+                    try {
+                        repo.clearCart()
+                    } catch (e: Exception) {
+                        _cartError.value = "تم إنشاء طلبك بنجاح، لكن تعذّر تفريغ السلة. أفرغها يدوياً قبل أي طلب جديد"
+                    }
+                }
                 if (useCoupon) clearCoupon()
                 onResult(true, id)
             } catch (e: Exception) {

@@ -62,6 +62,9 @@ fun CartScreen(
     onGoToProducts: () -> Unit = { onProductClick("") },
 ) {
     val cartItems by viewModel.cartItems.collectAsStateWithLifecycle()
+    // ✅ (Audit) راجع تعليق updateCartQuantity بالـViewModel — يُستخدم لتعطيل زرَّي
+    // +/- لعنصر بعينه أثناء تحديث كميته فقط، بلا تجميد بقية عناصر السلة.
+    val pendingQuantityUpdates by viewModel.pendingQuantityUpdates.collectAsStateWithLifecycle()
     val cartError by viewModel.cartError.collectAsStateWithLifecycle()
     val cartTotal by viewModel.cartTotal.collectAsStateWithLifecycle()
     val storeSettings by viewModel.storeSettings.collectAsStateWithLifecycle()
@@ -482,6 +485,7 @@ fun CartScreen(
                     CartItemRow(
                         item = item,
                         atMaxStock = item.stock > 0 && item.quantity >= item.stock,
+                        updating = item.productId in pendingQuantityUpdates,
                         onIncrease = {
                             viewModel.updateCartQuantity(item, 1) { ok, msg ->
                                 if (!ok) scope.launch {
@@ -533,6 +537,7 @@ fun CartScreen(
 private fun CartItemRow(
     item: CartItem,
     atMaxStock: Boolean = false,
+    updating: Boolean = false,
     onIncrease: () -> Unit,
     onDecrease: () -> Unit,
     onRemove: () -> Unit,
@@ -605,13 +610,17 @@ private fun CartItemRow(
                 ) {
                     IconButton(
                         onClick = onDecrease,
+                        enabled = !updating,
                         modifier = Modifier.size(28.dp),
                     ) {
                         Icon(
                             Icons.Filled.Remove,
                             contentDescription = "تقليل الكمية",
                             modifier = Modifier.size(12.dp),
-                            tint = MaterialTheme.colorScheme.onBackground,
+                            tint = if (updating)
+                                MutedForeground.copy(alpha = 0.4f)
+                            else
+                                MaterialTheme.colorScheme.onBackground,
                         )
                     }
                     Text(
@@ -624,14 +633,14 @@ private fun CartItemRow(
                     )
                     IconButton(
                         onClick = onIncrease,
-                        enabled = !atMaxStock,
+                        enabled = !atMaxStock && !updating,
                         modifier = Modifier.size(28.dp),
                     ) {
                         Icon(
                             Icons.Filled.Add,
                             contentDescription = "زيادة الكمية",
                             modifier = Modifier.size(12.dp),
-                            tint = if (atMaxStock)
+                            tint = if (atMaxStock || updating)
                                 MutedForeground.copy(alpha = 0.4f)
                             else
                                 MaterialTheme.colorScheme.onBackground,

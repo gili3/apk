@@ -1229,9 +1229,13 @@ fun NotificationsScreen(
                                         confirmButton = {
                                             TextButton(onClick = {
                                                 showConfirmDeleteAll = false
-                                                viewModel.deleteAllNotifications()
-                                                scope.launch {
-                                                    snackbarHostState.showMessage("تم حذف جميع الإشعارات", SnackbarType.SUCCESS)
+                                                viewModel.deleteAllNotifications { ok ->
+                                                    scope.launch {
+                                                        snackbarHostState.showMessage(
+                                                            if (ok) "تم حذف جميع الإشعارات" else "تعذّر حذف الإشعارات، تحقق من اتصالك",
+                                                            if (ok) SnackbarType.SUCCESS else SnackbarType.ERROR,
+                                                        )
+                                                    }
                                                 }
                                             }) { Text("حذف", color = Color(0xFFDC2626)) }
                                         },
@@ -1426,8 +1430,14 @@ fun NotificationsScreen(
                                 notif.actionRoute?.removePrefix("/")?.takeIf { it.isNotBlank() }?.let(onOpenRoute)
                             },
                             onDelete = {
-                                viewModel.deleteNotification(notif.id)
-                                scope.launch { snackbarHostState.showMessage("تم حذف الإشعار", SnackbarType.SUCCESS) }
+                                viewModel.deleteNotification(notif.id) { ok ->
+                                    scope.launch {
+                                        snackbarHostState.showMessage(
+                                            if (ok) "تم حذف الإشعار" else "تعذّر حذف الإشعار، تحقق من اتصالك",
+                                            if (ok) SnackbarType.SUCCESS else SnackbarType.ERROR,
+                                        )
+                                    }
+                                }
                             },
                         )
                     }

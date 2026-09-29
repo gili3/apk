@@ -186,9 +186,22 @@ fun ProductDetailScreen(
                             Button(
                                 onClick = {
                                     product?.let { p ->
-                                        viewModel.addToCart(p, 1)
-                                        coroutineScope.launch {
-                                            snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+                                        // ✅ (Audit) كان الإشعار "تمت الإضافة" يظهر فور الضغط بلا أي انتظار
+                                        // لنتيجة repo.addToCart الفعلية — لو انقطعت الشبكة أو انتهت الجلسة
+                                        // (requireOnline/requireUid يرميان استثناءً الآن) كان المستخدم يرى
+                                        // "نجحت" بينما لم تُكتب أي كمية بالسلة فعلياً. الإشعار الآن يُبنى على
+                                        // onResult الحقيقي: نجاح فعلي أو رسالة الخطأ الحقيقية من الاستثناء.
+                                        viewModel.addToCart(p, 1) { ok, message ->
+                                            coroutineScope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+                                                } else {
+                                                    snackbarHostState.showMessage(
+                                                        message ?: "تعذّر إضافة المنتج إلى السلة",
+                                                        SnackbarType.ERROR,
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 },

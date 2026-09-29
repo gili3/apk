@@ -67,6 +67,10 @@ fun ProfileScreen(
 
     var showForm by remember { mutableStateOf(false) }
     var editingAddress by remember { mutableStateOf<Address?>(null) }
+    // ✅ (Audit) راجع تعليق isSaving بـAddressFormCard — كانت هذه الشاشة الوحيدة
+    // بلا أي حماية من الحفظ المكرَّر (شاشة الدفع لديها isSaving محلي لكنه لم يكن
+    // يصل لتعطيل الزر أصلاً؛ صار مُمرَّراً الآن أيضاً — انظر أسفل).
+    var isSavingAddress by remember { mutableStateOf(false) }
     // ✅ جديد: حذف العنوان كان فورياً بلا تأكيد — الآن نافذة تأكيد قبل الحذف.
     var addressToDelete by remember { mutableStateOf<Address?>(null) }
     // ✅ جديد: راجع تعليق onMapTouchChanged بـLocationPicker.kt — يعطّل تمرير
@@ -394,6 +398,8 @@ fun ProfileScreen(
                         defaultFullName = rawName ?: "",
                         defaultPhone = userProfile?.phone ?: "",
                         onSave = { fullName, phoneNumber, city, address, isDefault, latitude, longitude ->
+                            if (isSavingAddress) return@AddressFormCard
+                            isSavingAddress = true
                             val newAddress = Address(
                                 fullName = fullName,
                                 phone = phoneNumber,
@@ -408,22 +414,27 @@ fun ProfileScreen(
                                     editingAddress!!.id,
                                     newAddress,
                                 ) {
+                                    isSavingAddress = false
                                     showForm = false
                                     editingAddress = null
                                 }
                             } else {
                                 viewModel.addAddress(newAddress) {
+                                    isSavingAddress = false
                                     showForm = false
                                     editingAddress = null
                                 }
                             }
                         },
                         onCancel = {
-                            showForm = false
-                            editingAddress = null
+                            if (!isSavingAddress) {
+                                showForm = false
+                                editingAddress = null
+                            }
                         },
                         onMapTouchChanged = { mapTouched = it },
                         onCheckDeliveryZone = { lat, lng -> viewModel.isLocationInDeliveryZone(lat, lng) },
+                        isSaving = isSavingAddress,
                     )
                     }
                 }
@@ -564,6 +575,13 @@ fun AddressFormCard(
     // أي موقع دائماً) موجودة فقط لسهولة المعاينة/الاختبار؛ كلا موضعَي
     // الاستدعاء الفعليين (حسابي، الدفع) يمرّران viewModel.isLocationInDeliveryZone.
     onCheckDeliveryZone: suspend (latitude: Double, longitude: Double) -> Boolean = { _, _ -> true },
+    // ✅ (Audit) الضغط على "حفظ" عدة مرات بسرعة (شبكة بطيئة) كان يستدعي onSave
+    // عدة مرات قبل اكتمال أول طلب — كل استدعاء ينشئ مستند عنوان جديد (addAddress
+    // يستخدم .document() بمعرّف عشوائي جديد كل مرة)، فتتكرر بطاقة العنوان نفسها
+    // بعدد الضغطات. isSaving خارجي اختياري (تستخدمه شاشة الدفع التي تتحكم أيضاً
+    // بإغلاق الـDialog)، وdefault داخلي (السطر التالي) يحمي الاستدعاء من هذا
+    // المكوّن نفسه (شاشة "عناويني") التي لم تكن تتتبّع حالة الحفظ إطلاقاً.
+    isSaving: Boolean = false,
 ) {
     // ✅ إصلاح: قائمة العناوين تبقى ظاهرة مع أزرار "تعديل" الخاصة بها حتى أثناء
     // فتح هذا النموذج (انظر مكان الاستدعاء بـProfileScreen) — لو ضغط المستخدم
@@ -740,6 +758,11 @@ fun AddressFormCard(
             ) {
                 Button(
                     onClick = {
+                        // ✅ (Audit) حارس إضافي رغم enabled=!isSaving أدناه: enabled يمنع نقرة
+                        // *جديدة* بعد إعادة الرسم، لكن نقرتين سريعتين جداً (قبل أن يعكس Compose
+                        // إعادة الرسم) قد تصلا كلتاهما لـonClick أولاً. الفحص هنا هو الضمانة
+                        // الفعلية بلا اعتماد على توقيت إعادة الرسم.
+                        if (isSaving) return@Button
                         if (fullName.isNotBlank() && phone.isNotBlank() &&
                             city.isNotBlank() && address.isNotBlank()
                         ) {
@@ -754,18 +777,27 @@ fun AddressFormCard(
                             }
                         }
                     },
+                    enabled = !isSaving,
                     modifier = Modifier
                         .weight(1f)
                         .height(40.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) {
-                    Text(
-                        if (initial != null) "حفظ التعديل" else "حفظ",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = Color.White,
-                    )
+                    if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                    } else {
+                        Text(
+                            if (initial != null) "حفظ التعديل" else "حفظ",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.White,
+                        )
+                    }
                 }
                 OutlinedButton(
                     onClick = onCancel,
@@ -1063,15 +1095,35 @@ fun FavoritesScreen(
                     FavoriteProductItem(
                         product = product,
                         onAddToCart = {
-                            viewModel.addToCart(product, 1)
-                            coroutineScope.launch {
-                                snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+                            // ✅ (Audit) نفس إصلاح شاشة تفاصيل المنتج: الإشعار يعكس نتيجة الإضافة
+                            // الفعلية (onResult) لا نجاحاً مفترضاً فور الضغط.
+                            viewModel.addToCart(product, 1) { ok, message ->
+                                coroutineScope.launch {
+                                    if (ok) {
+                                        snackbarHostState.showMessage("تمت الإضافة إلى السلة 🛒", SnackbarType.SUCCESS)
+                                    } else {
+                                        snackbarHostState.showMessage(
+                                            message ?: "تعذّر إضافة المنتج إلى السلة",
+                                            SnackbarType.ERROR,
+                                        )
+                                    }
+                                }
                             }
                         },
                         onToggleFavorite = {
-                            viewModel.toggleFavorite(product.id)
-                            coroutineScope.launch {
-                                snackbarHostState.showMessage("تمت الإزالة من المفضلة", SnackbarType.SUCCESS)
+                            // ✅ (Audit) نفس علة إضافة السلة: كانت تعرض "تمت الإزالة" فور الضغط
+                            // بصرف النظر عن نجاح الكتابة الفعلية بـFirestore.
+                            viewModel.toggleFavorite(product.id) { ok, message ->
+                                coroutineScope.launch {
+                                    if (ok) {
+                                        snackbarHostState.showMessage("تمت الإزالة من المفضلة", SnackbarType.SUCCESS)
+                                    } else {
+                                        snackbarHostState.showMessage(
+                                            message ?: "تعذّر تحديث المفضلة",
+                                            SnackbarType.ERROR,
+                                        )
+                                    }
+                                }
                             }
                         },
                         onClick = { onProductClick(product.id) },

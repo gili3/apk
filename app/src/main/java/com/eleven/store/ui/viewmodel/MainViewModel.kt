@@ -769,7 +769,19 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    // ✅ (Audit) ضغطتان سريعتان على "+" (شبكة بطيئة، أو ببساطة قبل أن تصل استجابة
+    // Firestore وتُحدِّث حالة الشاشة) كانتا تحسبان newQty من نفس item.quantity القديمة
+    // كلتاهما — والكتابة الثانية لنفس مستند السلة تُلغي الأولى بدل أن تتراكم معها،
+    // فتُفقَد ضغطة كاملة بصمت (زيادة واحدة فقط بدل اثنتين). نفس عائلة علة تكرار
+    // العنوان، لكن بالاتجاه المعاكس (فقدان بدل تكرار). الحل: قفل لكل منتج على حدة
+    // (لا قفل عام يُجمِّد بقية عناصر السلة) يرفض أي ضغطة جديدة على *نفس* المنتج
+    // حتى تكتمل الحالية.
+    private val _pendingQuantityUpdates = MutableStateFlow<Set<String>>(emptySet())
+    val pendingQuantityUpdates: StateFlow<Set<String>> = _pendingQuantityUpdates
+
     fun updateCartQuantity(item: CartItem, delta: Int, onResult: ((Boolean, String?) -> Unit)? = null) {
+        if (item.productId in _pendingQuantityUpdates.value) return
+        _pendingQuantityUpdates.value = _pendingQuantityUpdates.value + item.productId
         viewModelScope.launch {
             val newQty = item.quantity + delta
             try {
@@ -784,6 +796,8 @@ class MainViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 onResult?.invoke(false, e.message ?: "تعذر تحديث الكمية")
+            } finally {
+                _pendingQuantityUpdates.value = _pendingQuantityUpdates.value - item.productId
             }
         }
     }
@@ -798,12 +812,19 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun toggleFavorite(productId: String) {
+    // ✅ (Audit) onResult اختياري بلا كسر مواضع الاستدعاء الحالية (أيقونة القلب
+    // في الرئيسية/المنتجات لا تحتاجه، تكفيها _favoritesError + إعادة رسم الأيقونة
+    // من observeFavorites) — لكن أي مكان يعرض نص نجاح صريح ("تمت الإزالة من
+    // المفضلة") يجب أن ينتظر النتيجة الفعلية، لا أن يفترضها فور الضغط.
+    fun toggleFavorite(productId: String, onResult: ((Boolean, String?) -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 repo.toggleFavorite(productId)
+                onResult?.invoke(true, null)
             } catch (e: Exception) {
-                _favoritesError.value = repo.friendlySaveError(e)
+                val message = repo.friendlySaveError(e)
+                _favoritesError.value = message
+                onResult?.invoke(false, message)
             }
         }
     }
@@ -1038,15 +1059,20 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun deleteNotification(notifId: String) {
+    // ✅ (Audit) onResult يعكس النتيجة الفعلية — سابقاً كان الفشل يتراجع عن التحديث
+    // المتفائل بصمت تام: العنصر المحذوف "يعود" فجأة بلا أي تفسير، بينما المستخدم
+    // رأى توست "تم الحذف" فوراً عند الضغط (الشاشة المستدعية) بصرف النظر عن ذلك.
+    fun deleteNotification(notifId: String, onResult: ((Boolean) -> Unit)? = null) {
         val previous = _notifications.value
         _notifications.value = previous.filterNot { it.id == notifId }
         viewModelScope.launch {
             try {
                 repo.deleteNotification(notifId)
+                onResult?.invoke(true)
             } catch (e: Exception) {
                 Log.w("MainViewModel", "فشل حذف الإشعار، سيتم التراجع", e)
                 _notifications.value = previous
+                onResult?.invoke(false)
             }
         }
     }
@@ -1057,15 +1083,18 @@ class MainViewModel : ViewModel() {
     // optimistic update + rollback) — كانت القائمة تظهر فارغة للمستخدم
     // حتى لو فشلت العملية فعلياً (بلا اتصال مثلاً)، بينما الإشعارات لا تزال
     // موجودة على الخادم.
-    fun deleteAllNotifications() {
+    // ✅ (Audit) نفس إصلاح deleteNotification أعلاه.
+    fun deleteAllNotifications(onResult: ((Boolean) -> Unit)? = null) {
         val previous = _notifications.value
         _notifications.value = emptyList()
         viewModelScope.launch {
             try {
                 repo.deleteAllNotifications()
+                onResult?.invoke(true)
             } catch (e: Exception) {
                 Log.w("MainViewModel", "فشل حذف كل الإشعارات، سيتم التراجع", e)
                 _notifications.value = previous
+                onResult?.invoke(false)
             }
         }
     }

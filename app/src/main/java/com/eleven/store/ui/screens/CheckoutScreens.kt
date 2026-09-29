@@ -360,7 +360,12 @@ private fun AddressStepContent(
                 initial = null,
                 defaultFullName = defaultFullName,
                 defaultPhone = defaultPhone,
+                // ✅ (Audit) كانت isSaving تُضبط وتُقرأ فقط للتحكم بإغلاق الـDialog، بلا أي
+                // تمرير لزر الحفظ داخل AddressFormCard — فالزر يبقى قابلاً للنقر أثناء
+                // الحفظ الفعلي، ونقرات متكررة تُنشئ عدة عناوين مكررة (نفس علة شاشة "عناويني").
+                isSaving = isSaving,
                 onSave = { fullName, phone, city, address, isDefault, latitude, longitude ->
+                    if (isSaving) return@AddressFormCard
                     isSaving = true
                     onAddAddress(
                         Address(

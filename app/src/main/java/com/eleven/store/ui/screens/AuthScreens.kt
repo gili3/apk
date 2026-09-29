@@ -1129,10 +1129,16 @@ private fun ResetPasswordOtpContent(
                     TextButton(
                         onClick = {
                             resending = true
-                            viewModel.requestPasswordResetOtp(email) {
+                            // ✅ (Audit) requestPasswordResetOtp يُعيد Boolean نجاح حقيقي، لكن هذا
+                            // الموضع كان يتجاهله ويعرض "تم الإرسال" حتى عند فشل الطلب (انقطاع شبكة،
+                            // تجاوز حد المحاولات...) — نفس علة إضافة السلة بالضبط.
+                            viewModel.requestPasswordResetOtp(email) { ok ->
                                 resending = false
                                 scope.launch {
-                                    snackbarHostState.showMessage("تم إرسال رمز جديد إلى بريدك", SnackbarType.SUCCESS)
+                                    snackbarHostState.showMessage(
+                                        if (ok) "تم إرسال رمز جديد إلى بريدك" else "تعذّر إرسال الرمز، تحقق من اتصالك وحاول مرة أخرى",
+                                        if (ok) SnackbarType.SUCCESS else SnackbarType.ERROR,
+                                    )
                                 }
                             }
                         },
@@ -1280,10 +1286,14 @@ private fun VerifyEmailOtpContent(
                     TextButton(
                         onClick = {
                             resending = true
-                            viewModel.resendEmailVerificationOtpByEmail(email) {
+                            // ✅ (Audit) نفس العلة أعلاه بالضبط لإعادة إرسال رمز تأكيد البريد.
+                            viewModel.resendEmailVerificationOtpByEmail(email) { ok ->
                                 resending = false
                                 scope.launch {
-                                    snackbarHostState.showMessage("تم إرسال رمز جديد إلى بريدك", SnackbarType.SUCCESS)
+                                    snackbarHostState.showMessage(
+                                        if (ok) "تم إرسال رمز جديد إلى بريدك" else "تعذّر إرسال الرمز، تحقق من اتصالك وحاول مرة أخرى",
+                                        if (ok) SnackbarType.SUCCESS else SnackbarType.ERROR,
+                                    )
                                 }
                             }
                         },

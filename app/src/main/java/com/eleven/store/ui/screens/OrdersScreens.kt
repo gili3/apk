@@ -385,7 +385,7 @@ fun OrderDetailScreen(
                     item {
                         OrderValueRow(
                             label = if (o.couponCode.isNullOrBlank()) "الخصم" else "الخصم (${o.couponCode})",
-                            value = "-${formatPrice(o.discount)}",
+                            value = formatPrice(o.discount), // بلا "-" (تنقلب بالـRTL)؛ الصف معنون "الخصم" وباللون الأخضر
                             valueColor = Success,
                         )
                     }

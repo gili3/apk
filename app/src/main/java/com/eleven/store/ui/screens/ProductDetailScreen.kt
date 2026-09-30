@@ -1,6 +1,7 @@
 package com.eleven.store.ui.screens
 
 import com.eleven.store.ui.components.ElevenSnackbarHost
+import com.eleven.store.ui.components.discountBadgeText
 import com.eleven.store.ui.components.SnackbarType
 import com.eleven.store.ui.components.showMessage
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -169,7 +170,8 @@ fun ProductDetailScreen(
             if (product != null) {
                 Surface(
                     shadowElevation = 8.dp,
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                    // ✅ خلفية معتمة: الشفافية 0.95 كانت تُظهر محتوى الصفحة أسفل الشريط ببقعة فاتحة
+                    color = MaterialTheme.colorScheme.surface,
                 ) {
                     Column {
                         HorizontalDivider(color = Border, thickness = 1.dp)
@@ -353,7 +355,9 @@ fun ProductDetailScreen(
                                     AsyncImage(
                                         model = images[page],
                                         contentDescription = p.name,
-                                        contentScale = ContentScale.Crop,
+                                        // ✅ Fit بدل Crop: Crop كان يقصّ أطراف صور المنتجات العريضة (مجموعات
+                                        // من عدة قطع) فيظهر المنتج مقطوعاً من اليمين. الخلفية surfaceVariant تملأ الفراغ.
+                                        contentScale = ContentScale.Fit,
                                         placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                                         error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
                                         modifier = Modifier.fillMaxSize(),
@@ -486,7 +490,7 @@ fun ProductDetailScreen(
                                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                                         ) {
                                             Text(
-                                                "-$discount%",
+                                                discountBadgeText(discount), // "-3%" بتثبيت LTR (راجع Components.kt)
                                                 color = Color.White,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold,

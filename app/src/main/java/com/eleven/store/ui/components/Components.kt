@@ -103,14 +103,21 @@ fun ProductCard(
             // شارة خصم/مميز — الجهة المقابلة للقلب (TopEnd هنا = أعلى يسار
             // فعلياً بسبب فرض RTL بكامل التطبيق، راجع ملاحظة القلب أدناه)
             if (isOnSale) {
+                // شارة الخصم: حبة (pill) حمراء بنسبة "-6%" — النص مثبّت LTR عبر discountBadgeText
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .background(Destructive, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                        .padding(8.dp)
+                        .background(Destructive, RoundedCornerShape(50))
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
                 ) {
-                    Text("-$discount%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        discountBadgeText(discount ?: 0),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                    )
                 }
             } else if (product.isFeatured) {
                 Box(
@@ -354,3 +361,9 @@ fun ElevenTopBar(
         )
     )
 }
+
+/**
+ * نص شارة الخصم "-6%". علامة LRM (\u200E) في البداية تجعل الفقرة LTR فتظهر "-6%" كما يُتوقع؛ بدونها
+ * كان اتجاه الواجهة RTL يقلب العلامة فيظهر "6%-".
+ */
+internal fun discountBadgeText(discount: Int): String = "\u200E-$discount%"

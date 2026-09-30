@@ -279,6 +279,9 @@ fun CheckoutScreen(
                             3 -> ConfirmationStepContent(
                                 address = selectedAddress,
                                 total = finalTotal,
+                                subtotal = orderTotal,
+                                discountAmount = discountAmount,
+                                shippingCost = shippingCost,
                                 items = orderItems,
                                 agree = agree,
                                 onAgreeChange = { agree = it },
@@ -589,7 +592,7 @@ private fun PaymentStepContent(
                                 when (result) {
                                     is CouponResult.Valid -> {
                                         couponIsError = false
-                                        couponMessage = "تم تطبيق خصم بقيمة ${result.discountAmount}"
+                                        couponMessage = "تم تطبيق خصم بقيمة ${formatPrice(result.discountAmount)}" // ✅ كان يطبع الرقم الخام (7500.0) بلا فواصل ولا عملة
                                     }
                                     is CouponResult.Invalid -> {
                                         couponIsError = true
@@ -612,7 +615,7 @@ private fun PaymentStepContent(
                 if (couponMessage == null && discountAmount > 0) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "خصم مُطبَّق حالياً: $discountAmount",
+                        "خصم مُطبَّق حالياً: ${formatPrice(discountAmount)}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF16A34A),
@@ -774,10 +777,28 @@ private fun PaymentStepContent(
 //  STEP 3: CONFIRMATION — مطابق لـ ConfirmationStep في الموقع
 // ═══════════════════════════════════════════════════════════════
 
+/** سطر "عنوان … قيمة" بملخص تأكيد الطلب. */
+@Composable
+private fun CheckoutSummaryLine(label: String, value: String, valueColor: androidx.compose.ui.graphics.Color) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        Arrangement.SpaceBetween,
+        Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 14.sp, color = MutedForeground)
+        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = valueColor)
+    }
+}
+
 @Composable
 private fun ConfirmationStepContent(
     address: Address?,
     total: Double,
+    subtotal: Double,
+    discountAmount: Double,
+    shippingCost: Double,
     items: List<CartItem>,
     agree: Boolean,
     onAgreeChange: (Boolean) -> Unit,
@@ -828,6 +849,21 @@ private fun ConfirmationStepContent(
                 )
 
                 Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = Border)
+                Spacer(Modifier.height(12.dp))
+
+                // ✅ تفصيل المبلغ قبل التأكيد (كان يظهر الإجمالي النهائي فقط دون المجموع الفرعي
+                // والشحن والخصم، فلا يستطيع العميل مطابقة الرقم مع سلته). نفس حسابات CartScreen.
+                CheckoutSummaryLine("المجموع الفرعي", formatPrice(subtotal), MaterialTheme.colorScheme.onBackground)
+                if (discountAmount > 0.0) {
+                    CheckoutSummaryLine("الخصم", formatPrice(discountAmount), Success)
+                }
+                CheckoutSummaryLine(
+                    "الشحن",
+                    if (shippingCost == 0.0) "مجاني" else formatPrice(shippingCost),
+                    if (shippingCost == 0.0) Success else MaterialTheme.colorScheme.onBackground,
+                )
+                Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = Border)
                 Spacer(Modifier.height(12.dp))
 

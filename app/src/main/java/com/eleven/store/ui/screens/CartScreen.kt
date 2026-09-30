@@ -123,10 +123,175 @@ fun CartScreen(
                     shadowElevation = 8.dp,
                     color = MaterialTheme.colorScheme.surface,
                 ) {
-                    Column(
+                    // ✅ الشريط السفلي الثابت صار زر المتابعة فقط. كان يحمل الكوبون وملخص الأسعار
+                    // كاملين فيحجز نصف الشاشة ولا يبقى للمنتجات إلا بطاقتان؛ انتقلا الآن إلى قائمة
+                    // التمرير نفسها أسفل المنتجات (بطاقة ملخص الطلب ضمن LazyColumn أدناه).
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        ElevenButton(
+                            text = "المتابعة للدفع",
+                            onClick = onCheckout,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp),
+                        )
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        if (cartError != null && cartItems.isEmpty()) {
+            // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "السلة فارغة فعلاً" ──
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.CloudOff,
+                        contentDescription = null,
+                        tint = MutedForeground,
+                        modifier = Modifier.size(56.dp),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "تعذّر تحميل السلة",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = { viewModel.retryCart() },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                    ) {
+                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else if (cartItems.isEmpty()) {
+            // ── حالة السلة الفارغة — مطابقة للموقع ──
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp),
+                ) {
+                    // أيقونة السلة الفارغة
+                    Box(
+                        modifier = Modifier
+                            .size(96.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                RoundedCornerShape(48.dp),
+                            )
+                            .border(1.dp, Border, RoundedCornerShape(48.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.ShoppingBag,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MutedForeground,
+                        )
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        "سلتك فارغة",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "لم تضف أي منتجات بعد. اكتشف مجموعتنا الآن!",
+                        color = MutedForeground,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(28.dp))
+                    ElevenButton(
+                        text = "تسوق الآن",
+                        onClick = onGoToProducts,
+                        modifier = Modifier
+                            .height(48.dp)
+                            .padding(horizontal = 32.dp),
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 16.dp + padding.calculateTopPadding(),
+                    bottom = 16.dp + padding.calculateBottomPadding(),
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // عدد المنتجات
+                item {
+                    Text(
+                        "${cartItems.size} منتج",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MutedForeground,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+
+                items(cartItems, key = { it.productId }) { item ->
+                    CartItemRow(
+                        item = item,
+                        atMaxStock = item.stock > 0 && item.quantity >= item.stock,
+                        updating = item.productId in pendingQuantityUpdates,
+                        onIncrease = {
+                            viewModel.updateCartQuantity(item, 1) { ok, msg ->
+                                if (!ok) scope.launch {
+                                    snackbarHostState.showMessage(
+                                        msg ?: "لا يمكن تجاوز الكمية المتوفرة في المخزون",
+                                        SnackbarType.WARNING
+                                    )
+                                }
+                            }
+                        },
+                        onDecrease = {
+                            viewModel.updateCartQuantity(item, -1)
+                        },
+                        onRemove = { viewModel.removeFromCart(item.productId) },
+                        onProductClick = { onProductClick(item.productId) },
+                    )
+                }
+
+                // ✅ الكوبون + ملخص الأسعار + الإجمالي داخل التمرير مع المنتجات (بدل شريط ثابت يحجب الشاشة)
+                item(key = "cart-summary") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                            .border(1.dp, Border, RoundedCornerShape(16.dp))
                             .padding(16.dp),
                     ) {
                         // ── حقل كود الخصم — مطابق لـ OrderSummary في الموقع ──
@@ -279,7 +444,7 @@ fun CartScreen(
                                     fontSize = 14.sp,
                                 )
                                 Text(
-                                    "-${formatNumber(discountAmount)} ج.س",
+                                    "${formatNumber(discountAmount)} ج.س", // بلا علامة "-" (تنقلب بالـRTL)؛ الصف معنون "الخصم" وباللون الأخضر
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
                                     color = Success,
@@ -347,161 +512,7 @@ fun CartScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-
-                        Spacer(Modifier.height(16.dp))
-
-                        // زر متابعة الدفع
-                        ElevenButton(
-                            text = "المتابعة للدفع",
-                            onClick = onCheckout,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp),
-                        )
                     }
-                }
-            }
-        }
-    ) { padding ->
-        if (cartError != null && cartItems.isEmpty()) {
-            // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "السلة فارغة فعلاً" ──
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(32.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.CloudOff,
-                        contentDescription = null,
-                        tint = MutedForeground,
-                        modifier = Modifier.size(56.dp),
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "تعذّر تحميل السلة",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
-                        color = MutedForeground,
-                        fontSize = 14.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(20.dp))
-                    Button(
-                        onClick = { viewModel.retryCart() },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
-                    ) {
-                        Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        } else if (cartItems.isEmpty()) {
-            // ── حالة السلة الفارغة — مطابقة للموقع ──
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(32.dp),
-                ) {
-                    // أيقونة السلة الفارغة
-                    Box(
-                        modifier = Modifier
-                            .size(96.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                RoundedCornerShape(48.dp),
-                            )
-                            .border(1.dp, Border, RoundedCornerShape(48.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Filled.ShoppingBag,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MutedForeground,
-                        )
-                    }
-                    Spacer(Modifier.height(20.dp))
-                    Text(
-                        "سلتك فارغة",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Serif,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "لم تضف أي منتجات بعد. اكتشف مجموعتنا الآن!",
-                        color = MutedForeground,
-                        fontSize = 14.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(28.dp))
-                    ElevenButton(
-                        text = "تسوق الآن",
-                        onClick = onGoToProducts,
-                        modifier = Modifier
-                            .height(48.dp)
-                            .padding(horizontal = 32.dp),
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 16.dp + padding.calculateTopPadding(),
-                    bottom = 16.dp + padding.calculateBottomPadding(),
-                ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // عدد المنتجات
-                item {
-                    Text(
-                        "${cartItems.size} منتج",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MutedForeground,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-
-                items(cartItems, key = { it.productId }) { item ->
-                    CartItemRow(
-                        item = item,
-                        atMaxStock = item.stock > 0 && item.quantity >= item.stock,
-                        updating = item.productId in pendingQuantityUpdates,
-                        onIncrease = {
-                            viewModel.updateCartQuantity(item, 1) { ok, msg ->
-                                if (!ok) scope.launch {
-                                    snackbarHostState.showMessage(
-                                        msg ?: "لا يمكن تجاوز الكمية المتوفرة في المخزون",
-                                        SnackbarType.WARNING
-                                    )
-                                }
-                            }
-                        },
-                        onDecrease = {
-                            viewModel.updateCartQuantity(item, -1)
-                        },
-                        onRemove = { viewModel.removeFromCart(item.productId) },
-                        onProductClick = { onProductClick(item.productId) },
-                    )
                 }
 
                 // رابط متابعة التسوق

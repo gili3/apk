@@ -869,8 +869,8 @@ class MainViewModel : ViewModel() {
 
     // ─── Coupon ─────────────────────────────────────────────────
     // ✅ حالة مشتركة بين CartScreen و CheckoutScreen (نفس الـ ViewModel عبر شاشات التنقل)
-    // المعاينة هنا فقط للعرض؛ التحقق النهائي والخصم الفعلي يتمّان داخل repo.placeOrder()
-    // عبر transaction ذرّية على Firestore مباشرة، تماماً كما في السيرفر بالموقع.
+    // المعاينة هنا فقط للعرض؛ التحقق النهائي والخصم الفعلي يتمّان على السيرفر داخل Cloud Function
+    // `placeOrder` (transaction واحدة بـAdmin SDK) التي تستدعيها repo.placeOrder().
     var appliedCouponCode by mutableStateOf<String?>(null)
         private set
     var appliedCouponDiscount by mutableDoubleStateOf(0.0)
@@ -906,6 +906,22 @@ class MainViewModel : ViewModel() {
     suspend fun isLocationInDeliveryZone(lat: Double, lng: Double): Boolean =
         repo.isLocationInDeliveryZone(lat, lng)
 
+    private fun isReportableOrderFailure(e: Exception): Boolean {
+        val code = (e.cause as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+        if (code != null) {
+            return when (code) {
+                com.google.firebase.functions.FirebaseFunctionsException.Code.INTERNAL,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNKNOWN,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.DATA_LOSS,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNIMPLEMENTED,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.NOT_FOUND -> true
+                else -> false
+            }
+        }
+        // IllegalStateException = رسائل تحقق مقصودة من المستودع، وIOException = لا اتصال
+        return e !is IllegalStateException && e !is java.io.IOException
+    }
+
     fun placeOrder(
         order: Order,
         clearCart: Boolean = true,  // ✅ false عند شراء الآن لحماية السلة
@@ -932,7 +948,11 @@ class MainViewModel : ViewModel() {
                 // ✅ إضافة (بطلب الأدمن): فشل إنشاء طلب فعلي مهم جداً معرفته —
                 // يظهر الآن بصفحة "سجل الأخطاء" بلوحة التحكم، غير قاتل (المستخدم
                 // يرى رسالة الخطأ عادةً ويمكنه المحاولة مرة أخرى، لا كراش).
-                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "placeOrder")
+                // ✅ نبلّغ فقط عن الأعطال الحقيقية. رفض السيرفر المتوقع (مخزون/كوبون/منطقة توصيل/حد معدل)
+                // وانقطاع الاتصال رسائل تخصّ المستخدم لا الأدمن — كانت تملأ "سجل الأخطاء" بلا فائدة.
+                if (isReportableOrderFailure(e)) {
+                    com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "placeOrder")
+                }
                 onResult(false, e.message ?: "حدث خطأ")
             }
         }

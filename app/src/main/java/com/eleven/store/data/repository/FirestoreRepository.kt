@@ -1109,16 +1109,21 @@ class FirestoreRepository {
     // مع createdAt وuid المرسل (إن كان مسجّل دخول) لتتبعها لاحقاً.
     suspend fun sendContactMessage(name: String, email: String, subject: String, message: String) {
         requireOnline()
-        val data = hashMapOf(
-            "name" to name.trim(),
-            "email" to email.trim(),
-            "subject" to subject.trim(),
-            "message" to message.trim(),
-            "userId" to uid,
-            "status" to "new",
-            "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-        )
-        db.collection("contactMessages").document().set(data).await()
+        // ✅ عبر Cloud Function `submitContactMessage` (حد لكل IP ولكل مرسِل قبل الكتابة) — القواعد
+        // لم تعد تسمح بالكتابة المباشرة على contactMessages (كانت مفتوحة للجميع بلا حد معدل).
+        try {
+            functions.getHttpsCallable("submitContactMessage")
+                .call(
+                    mapOf(
+                        "name" to name.trim(),
+                        "email" to email.trim(),
+                        "subject" to subject.trim(),
+                        "message" to message.trim(),
+                    )
+                ).await()
+        } catch (e: com.google.firebase.functions.FirebaseFunctionsException) {
+            throw IllegalStateException(friendlyCallableError(e, "تعذّر إرسال رسالتك، حاول مرة أخرى"), e)
+        }
     }
 
     // ✅ إصلاح: تفعيل "افتراضي" على عنوان لم يكن يُلغي الصفة عن باقي عناوين
@@ -1356,144 +1361,108 @@ class FirestoreRepository {
         return inside
     }
 
+    /**
+     * ✅ الطلب يُنشأ على السيرفر عبر Cloud Function `placeOrder`
+     * (functions/src/callables/placeOrder.ts) بدل كتابته مباشرة من التطبيق.
+     *
+     * السبب: كانت القواعد تسمح لأي حساب موثَّق بإنقاص المخزون وزيادة العدّاد واستخدام الكوبون
+     * مباشرة (استنزاف مخزون/حرق كوبون بلا طلب) ولا تقارن الكمية بالمخزون. الآن المخزون والكوبون
+     * والعدّاد ومستند الطلب تُكتب كلها داخل transaction واحدة على السيرفر (Admin SDK)، والقواعد
+     * ترفض أي كتابة مباشرة عليها. السعر والشحن والخصم والمنطقة تُشتق كلها هناك، لا من التطبيق.
+     *
+     * الإشعارات (العميل + الأدمن + Push) تصل تلقائياً من trigger `onOrderCreated` بمجرد إنشاء
+     * مستند الطلب — لا كتابة إشعار هنا. تفريغ السلة يبقى من ViewModel (clearCart) بعد النجاح.
+     */
+    // ✅ معرّف idempotency: يبقى ثابتاً لإعادة محاولة *نفس* الطلب (نفس السلة/العنوان/الكوبون/الإيصال)
+    // بعد انقطاع شبكة محتمل النجاح على السيرفر، فيُرجع السيرفر الطلب الأول بدل إنشاء طلب مكرَّر
+    // وخصم مخزون مرتين. يُصفَّر عند النجاح أو عند رفض قاطع من السيرفر، ويتغيّر تلقائياً لو تغيّر الطلب.
+    private var pendingOrderRequest: Pair<String, String>? = null
+
+    private fun orderRequestIdFor(fingerprint: String): String {
+        val pending = pendingOrderRequest
+        if (pending != null && pending.first == fingerprint) return pending.second
+        val id = java.util.UUID.randomUUID().toString().replace("-", "")
+        pendingOrderRequest = fingerprint to id
+        return id
+    }
+
     suspend fun placeOrder(order: Order, couponCode: String? = null): String {
         requireOnline()
-        val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
-        // ✅ (Audit) فحص مبكر بلا شبكة: كمية غير موجبة أو منتج مكرَّر بسطرين. التكرار
-        // خطير داخل المعاملة لأن كل سطر يقرأ نفس لقطة المخزون فيُكتب آخرهما فقط
-        // (بيع أكثر من المتوفر). القواعد ترفض الكمية ≤ 0 أصلاً، لكن هنا رسالة واضحة.
+        uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
+        // فحص مبكر بلا شبكة برسالة واضحة (السيرفر يعيد نفس التحقق ويدمج المكرَّر أيضاً)
         if (order.items.isEmpty() ||
             order.items.any { it.quantity <= 0 } ||
             order.items.map { it.productId }.distinct().size != order.items.size
         ) {
             throw IllegalStateException("بيانات الطلب غير صالحة، حدّث السلة وحاول مرة أخرى")
         }
+        // فحص مبكر غير قاطع لتجربة أسرع؛ التحقق القاطع بالسيرفر (assertWithinDeliveryZone هناك)
         assertWithinDeliveryZone(order.shippingAddress)
-        val ref = db.collection("orders").document()
-        val verificationToken = java.util.UUID.randomUUID().toString().replace("-", "").take(26)
+        val address = order.shippingAddress
+            ?: throw IllegalStateException("يرجى تحديد عنوان التوصيل")
 
-        val counterRef = db.collection("counters").document("orders")
-        val code = couponCode?.trim()?.uppercase()
-        val couponRef = code?.let { db.collection("coupons").document(it) }
-        // ✅ إصلاح (Audit M-4): سجل استخدام الكوبون لكل مستخدم — منع إعادة استخدام
-        // نفس الكوبون أكثر من مرة لكل مستخدم (مطابق لقاعدة coupons/{code}/usedBy/{uid}).
-        val couponUsedByRef = couponRef?.collection("usedBy")?.document(u)
+        val fingerprint = listOf(
+            order.items.sortedBy { it.productId }.joinToString(",") { "${it.productId}x${it.quantity}" },
+            couponCode?.trim()?.uppercase().orEmpty(),
+            "${address.id}|${address.phone}|${address.city}|${address.address}|${address.latitude}|${address.longitude}",
+            order.paymentMethod, order.paymentReceipt, order.notes,
+        ).joinToString("#")
 
-        // ✅ إصلاح (Audit H-1/H-2/M-4): تم دمج كل شيء ضمن معاملة (transaction) واحدة
-        // ذرّية بالكامل — قراءة المنتجات/الكوبون/العدّاد/سجل الاستخدام، ثم كتابة خصم
-        // المخزون + زيادة استخدام الكوبون + سجل usedBy + عدّاد رقم الطلب + مستند
-        // الطلب نفسه، كلها معاً أو لا شيء منها إطلاقاً. سابقاً كانت هذه ثلاث عمليات
-        // منفصلة (معاملتان + كتابة حرة)، فكان ممكناً أن يُخصَم المخزون/الكوبون بلا
-        // إنشاء مستند الطلب فعلياً إذا انقطع الاتصال بين الخطوات.
-        // ⚠️ ملاحظة: هذا يمنع تلاعب واجهة التطبيق بالسعر، وقواعد Firestore (firestore.rules)
-        // تفرض الآن نفس التحقق من السعر/الخصم مباشرة على مستوى القاعدة أيضاً (دفاع مزدوج)
-        // لأي كتابة تصل خارج التطبيق تماماً.
-        // ✅ إصلاح (ثغرة مالية): shippingCost كان يُؤخذ سابقاً مباشرة من order
-        // (كائن مبني على العميل) بلا أي إعادة اشتقاق من settings/store داخل
-        // الـtransaction — بعكس السعر والكوبون اللذين يُعاد التحقق منهما فعلياً.
-        // عميل مُعاد بناؤه (APK مفكوك) كان يستطيع إرسال shippingCost: 0 مع كل
-        // طلب. الآن يُشتق من settings/store هنا (نفس منطق shippingBase/
-        // freeShippingThreshold المستخدم بالسيرفر)، ويجب أن يطابقه أيضاً
-        // firestore.rules (shippingCostValid) كخط دفاع مستقل ثانٍ.
-        val settingsRef = db.collection("settings").document("store")
-
-        val orderId = db.runTransaction { tx ->
-            val productRefs = order.items.map { db.collection("products").document(it.productId) }
-            val productSnaps = productRefs.map { tx.get(it) }
-            val couponSnap = couponRef?.let { tx.get(it) }
-            val couponUsedBySnap = couponUsedByRef?.let { tx.get(it) }
-            val counterSnap = tx.get(counterRef)
-            val settingsSnap = tx.get(settingsRef)
-
-            val authoritativeItems = productSnaps.mapIndexed { idx, snap ->
-                val item = order.items[idx]
-                if (!snap.exists() || snap.getBoolean("isActive") == false) {
-                    throw IllegalStateException("${item.name}: هذا المنتج لم يعد متوفراً")
-                }
-                val stock = snap.getLong("stock") ?: 0L
-                if (item.quantity > stock) {
-                    throw IllegalStateException("${item.name}: الكمية المطلوبة غير متوفرة في المخزون")
-                }
-                val price = when (val p = snap.get("price")) {
-                    is Double -> p
-                    is Long -> p.toDouble()
-                    is Number -> p.toDouble()
-                    else -> 0.0
-                }
-                item.copy(price = price, name = snap.getString("name") ?: item.name)
+        val payload = hashMapOf<String, Any?>(
+            "requestId" to orderRequestIdFor(fingerprint),
+            "items" to order.items.map { mapOf("productId" to it.productId, "quantity" to it.quantity) },
+            "couponCode" to couponCode?.trim()?.uppercase(),
+            "shippingAddress" to mapOf(
+                "id" to address.id,
+                "fullName" to address.displayName,
+                "name" to address.displayName,
+                "phone" to address.phone,
+                "city" to address.city,
+                "address" to address.address,
+                "latitude" to address.latitude,
+                "longitude" to address.longitude,
+                "isDefault" to address.isDefault,
+            ),
+            "paymentMethod" to order.paymentMethod,
+            "paymentReceipt" to order.paymentReceipt,
+            "notes" to order.notes,
+        )
+        try {
+            val result = functions.getHttpsCallable("placeOrder").call(payload).await()
+            val data = result.data as? Map<*, *>
+            val id = data?.get("id") as? String
+                ?: throw IllegalStateException("تعذّر إنشاء الطلب، حاول مرة أخرى")
+            pendingOrderRequest = null
+            return id
+        } catch (e: com.google.firebase.functions.FirebaseFunctionsException) {
+            // رفض قاطع من السيرفر (مخزون/كوبون/منطقة...) = لم يُنشأ طلب، فالمحاولة القادمة معرّف جديد.
+            // أخطاء الشبكة/الداخلية (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL) نُبقي معرّفها للإعادة الآمنة.
+            when (e.code) {
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNAVAILABLE,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.INTERNAL,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNKNOWN -> Unit
+                else -> pendingOrderRequest = null
             }
-            val subtotal = authoritativeItems.sumOf { it.price * it.quantity }
+            throw IllegalStateException(friendlyCallableError(e, "تعذّر إتمام الطلب، حاول مرة أخرى"), e)
+        }
+    }
 
-            var discountAmount = 0.0
-            var appliedCoupon: String? = null
-            if (code != null) {
-                if (couponUsedBySnap?.exists() == true) {
-                    throw IllegalStateException("لقد استخدمت هذا الكود من قبل")
-                }
-                val coupon = couponSnap?.takeIf { it.exists() }
-                    ?.toObject(Coupon::class.java)?.copy(code = code)
-                when (val check = evaluateCoupon(coupon, subtotal)) {
-                    is CouponResult.Valid -> { discountAmount = check.discountAmount; appliedCoupon = code }
-                    is CouponResult.Invalid -> throw IllegalStateException(check.message)
-                }
-            }
-
-            // ✅ سعر الشحن مشتق هنا من settings/store الحقيقي، وليس من order.shippingCost
-            // القادم من العميل — نفس منطق shippingBase/freeShippingThreshold بالسيرفر.
-            val shippingBase = when (val s = settingsSnap.get("shippingCost")) {
-                is Number -> s.toDouble()
-                else -> 30.0
-            }
-            val freeShippingThreshold = when (val t = settingsSnap.get("freeShippingThreshold")) {
-                is Number -> t.toDouble()
-                else -> 0.0
-            }
-            val shippingCost = if (freeShippingThreshold > 0 && subtotal >= freeShippingThreshold) 0.0 else shippingBase
-
-            val total = Math.round((subtotal - discountAmount + shippingCost) * 100) / 100.0
-            val current = (counterSnap.getLong("current") ?: 11001000L)
-            val next = current + 1
-
-            // ── الكتابات (كل القراءات أعلاه تسبق أي كتابة، كما تفرضه واجهة Transaction) ──
-            productSnaps.forEachIndexed { idx, snap ->
-                val item = order.items[idx]
-                val stock = snap.getLong("stock") ?: 0L
-                tx.update(productRefs[idx], "stock", stock - item.quantity)
-            }
-            if (appliedCoupon != null && couponRef != null) {
-                val usageCount = couponSnap?.getLong("usageCount") ?: 0L
-                tx.update(couponRef, "usageCount", usageCount + 1)
-                couponUsedByRef?.let { tx.set(it, mapOf("usedAt" to com.google.firebase.Timestamp.now())) }
-            }
-            tx.set(counterRef, mapOf("current" to next), com.google.firebase.firestore.SetOptions.merge())
-
-            val orderWithId = order.copy(
-                id = ref.id,
-                userId = u,
-                items = authoritativeItems,
-                subtotal = subtotal,
-                discount = discountAmount,
-                couponCode = appliedCoupon,
-                shippingCost = shippingCost,
-                total = total,
-                orderNumber = next.toString(),
-                verificationToken = verificationToken,
-                createdAt = com.google.firebase.Timestamp.now(),
-            )
-            tx.set(ref, orderWithId)
-
-            ref.id
-        }.await()
-
-        // ✅ نظام الإشعارات v2: لم يعد هذا الكود يكتب أي إشعار بنفسه.
-        // Cloud Function واحدة (functions/src/triggers/orderTriggers.ts::
-        // onOrderCreated) تلاحظ إنشاء مستند orders/{orderId} نفسه أعلاه
-        // وتُنشئ إشعارَي العميل والأدمن + ترسل Push فعلياً عبر Admin SDK.
-        // سابقاً كانت الكتابة هنا تتم مباشرة من العميل (Client SDK) فتُنشئ
-        // سجل الإشعار فقط بدون أي قدرة على إرسال Push حقيقي — أي أن صاحب
-        // المتجر لم يكن يصله أي تنبيه إطلاقاً عن طلبات وصلت من هذا التطبيق
-        // تحديداً، فقط سجل صامت يظهر إن فتح قائمة إشعاراته بنفسه صدفة.
-        return orderId
+    /**
+     * رسائل أخطاء الـCallables التي نرميها عمداً بالسيرفر (HttpsError بالعربية: مخزون، كوبون، منطقة
+     * توصيل، حد معدل...) تُعرض كما هي؛ أي خطأ داخلي/شبكة يُستبدل برسالة عامة بدل نص إنجليزي تقني.
+     */
+    private fun friendlyCallableError(
+        e: com.google.firebase.functions.FirebaseFunctionsException,
+        fallback: String,
+    ): String = when (e.code) {
+        com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.FAILED_PRECONDITION,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.PERMISSION_DENIED,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.UNAUTHENTICATED,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+            e.message?.takeIf { it.isNotBlank() } ?: fallback
+        else -> fallback
     }
 
     // ─── Notifications (v2) ───────────────────────────────────────

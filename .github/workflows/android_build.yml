@@ -29,6 +29,9 @@ jobs:
     - name: Build debug (unsigned, no secrets) — للتحقق من نجاح الكومبايل فقط
       run: ./gradlew assembleDebug
 
+    - name: Unit tests
+      run: ./gradlew testDebugUnitTest
+
   # ✅ إصلاح: بناء الـrelease الموقّع (وفك تشفير الـkeystore) يعمل فقط عند push
   # لفرع main/master فعلياً (بعد المراجعة والدمج)، أو تشغيل يدوي — وليس عند أي
   # pull_request. سابقاً كان توقيع الـrelease يحدث على كل PR حتى من فروع داخل
@@ -61,6 +64,9 @@ jobs:
     # ⚠️ يُكتب الملف داخل app/ عمداً (وليس جذر المستودع): storeFile في build.gradle
     # يُفسَّر بالنسبة لمجلد الوحدة app/ عند تمرير مسار نسبي بسيط عبر RELEASE_STORE_FILE
     # أدناه — كتابته بمكان آخر تسبب سابقاً "Keystore file ... not found" رغم صحة الأسرار.
+    - name: Unit tests (قبل بناء نسخة موقّعة)
+      run: ./gradlew testDebugUnitTest
+
     - name: Decode release keystore
       env:
         RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}

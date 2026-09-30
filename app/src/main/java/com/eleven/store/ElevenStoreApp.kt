@@ -11,7 +11,6 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.google.firebase.Firebase
 import com.google.firebase.appcheck.appCheck
-import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.PersistentCacheSettings
@@ -103,9 +102,10 @@ class ElevenStoreApp : Application(), ImageLoaderFactory {
     // الإنفاذ على Firestore يشمل الموقع والأندرويد معاً، وليس الأندرويد فقط.
     private fun initFirebaseAppCheck() {
         Firebase.initialize(this)
-        Firebase.appCheck.installAppCheckProviderFactory(
-            PlayIntegrityAppCheckProviderFactory.getInstance()
-        )
+        // المزوّد يختلف حسب نوع البناء (src/debug مقابل src/release) — راجع AppCheckProvider.kt:
+        // نسخ release تستخدم Play Integrity، ونسخ debug تستخدم Debug provider (رمز يُسجَّل يدوياً
+        // بـFirebase Console) حتى لا تُحجَب بيئة التطوير عند تفعيل Enforce.
+        Firebase.appCheck.installAppCheckProviderFactory(appCheckProviderFactory())
     }
 
     // ✅ إصلاح جذري (سبب رئيسي لعدم وصول الإشعارات): كانت قناة الإشعارات

@@ -145,6 +145,8 @@ dependencies {
     // وملف stage3-security-report.md لخطوات تفعيل "Enforce" الإلزامية
     // بـFirebase Console (لن يعمل أي منع فعلي بدونها).
     implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+    // Debug provider لنسخ debug فقط (يُستخدم عبر src/debug/.../AppCheckProvider.kt)
+    debugImplementation 'com.google.firebase:firebase-appcheck-debug'
 
     // Google Sign-In (لمطابقة "تسجيل الدخول عبر Google" في الموقع)
     implementation 'com.google.android.gms:play-services-auth:21.2.0'

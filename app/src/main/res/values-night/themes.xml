@@ -13,8 +13,8 @@
 
     <!-- ✅ جديد: نفس ثيم شاشة الإقلاع بالوضع الداكن — راجع values/themes.xml -->
     <style name="Theme.ElevenStore.Starting" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/background</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="windowSplashScreenBackground">@color/ic_logo_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_logo_foreground</item>
         <item name="postSplashScreenTheme">@style/Theme.ElevenStore</item>
     </style>
 </resources>

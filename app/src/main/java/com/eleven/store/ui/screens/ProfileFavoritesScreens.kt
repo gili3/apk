@@ -825,89 +825,137 @@ private fun FavoriteProductItem(
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Border),
-    ) {
-        Column {
-            // صورة المنتج مع زر المفضلة
-            Box {
-                AsyncImage(
-                    model = product.mainImage,
-                    contentDescription = product.name,
-                    contentScale = ContentScale.Crop,
-                    placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
-                    error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+    val discount = product.discountPercent
+    val outOfStock = product.stock <= 0
+
+    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        // ── صورة مربّعة مع قلب دائري وشارة خصم/نفاد ──
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Neutral100),
+        ) {
+            AsyncImage(
+                model = product.mainImage,
+                contentDescription = product.name,
+                contentScale = ContentScale.Crop,
+                placeholder = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.Image),
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (outOfStock) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                )
-                // زر قلب — شفاف الخلفية، أعلى يسار — موحّد مع بقية البطاقات
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .size(32.dp),
+                        .fillMaxSize()
+                        .background(Color.White.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        Icons.Filled.Favorite,
-                        null,
-                        tint = Destructive,
-                        modifier = Modifier.size(22.dp),
+                    Text(
+                        "نفد المخزون",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .background(Ink.copy(alpha = 0.85f), RoundedCornerShape(50))
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
+            } else if (discount != null && discount > 0) {
+                Text(
+                    "\u200E-$discount%",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(Destructive, RoundedCornerShape(50))
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
+                )
+            }
+            // قلب داخل دائرة بيضاء 36dp (ظاهر على أي صورة)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .size(36.dp)
+                    .background(Color.White.copy(alpha = 0.92f), CircleShape)
+                    .clip(CircleShape)
+                    .clickable(onClick = onToggleFavorite),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Favorite, "إزالة من المفضلة", tint = Destructive, modifier = Modifier.size(20.dp))
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = product.name,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = formatPrice(product.price),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 15.sp,
+                )
+                if (discount != null && discount > 0 && product.originalPrice != null) {
+                    Text(
+                        text = formatPrice(product.originalPrice),
+                        color = MutedForeground,
+                        fontSize = 11.sp,
+                        textDecoration = TextDecoration.LineThrough,
                     )
                 }
             }
-            // معلومات المنتج
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = product.name,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            // زر السلة 44dp (حجم لمس مريح) — معطّل عند نفاد المخزون
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (outOfStock) Neutral200 else MaterialTheme.colorScheme.onBackground)
+                    .clickable(enabled = !outOfStock, onClick = onAddToCart),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.ShoppingCart,
+                    "أضف للسلة",
+                    tint = if (outOfStock) Neutral400 else MaterialTheme.colorScheme.background,
+                    modifier = Modifier.size(20.dp),
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = formatPrice(product.price),
-                    color = Accent,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 18.sp,
-                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoritesSkeletonGrid(topPadding: androidx.compose.ui.unit.Dp) {
+    val alpha by com.eleven.store.ui.components.rememberInfiniteTransitionAlpha()
+    val tone = Neutral200.copy(alpha = alpha)
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        userScrollEnabled = false,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp + topPadding, bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items(6) {
+            Column {
+                Box(Modifier.fillMaxWidth().aspectRatio(1f).background(tone, RoundedCornerShape(16.dp)))
                 Spacer(Modifier.height(8.dp))
-                // زر إضافة للسلة
-                Button(
-                    onClick = onAddToCart,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(32.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.onBackground,
-                        contentColor = MaterialTheme.colorScheme.background,
-                    ),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.ShoppingCart,
-                        null,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "أضف للسلة",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                    )
-                }
+                Box(Modifier.fillMaxWidth(0.8f).height(12.dp).background(tone, RoundedCornerShape(4.dp)))
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth(0.4f).height(14.dp).background(tone, RoundedCornerShape(4.dp)))
             }
         }
     }
@@ -969,12 +1017,7 @@ fun FavoritesScreen(
         topBar = { ElevenTopBar(title = "المفضلة") },
     ) { padding ->
         if (isLoading && favProducts.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.size(48.dp))
-            }
+            FavoritesSkeletonGrid(topPadding = padding.calculateTopPadding())
         } else if (loadError != null && favProducts.isEmpty()) {
             // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "لا توجد مفضلة فعلاً" ──
             Box(
@@ -1089,7 +1132,7 @@ fun FavoritesScreen(
                     bottom = 16.dp + padding.calculateBottomPadding(),
                 ),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(favProducts, key = { it.id }) { product ->
                     FavoriteProductItem(
@@ -1116,7 +1159,15 @@ fun FavoritesScreen(
                             viewModel.toggleFavorite(product.id) { ok, message ->
                                 coroutineScope.launch {
                                     if (ok) {
-                                        snackbarHostState.showMessage("تمت الإزالة من المفضلة", SnackbarType.SUCCESS)
+                                        // ✅ تراجع (Undo): إعادة المنتج بنفس toggleFavorite
+                                        val result = snackbarHostState.showMessage(
+                                            "تمت الإزالة من المفضلة",
+                                            SnackbarType.SUCCESS,
+                                            actionLabel = "تراجع",
+                                        )
+                                        if (result == SnackbarResult.ActionPerformed) {
+                                            viewModel.toggleFavorite(product.id)
+                                        }
                                     } else {
                                         snackbarHostState.showMessage(
                                             message ?: "تعذّر تحديث المفضلة",

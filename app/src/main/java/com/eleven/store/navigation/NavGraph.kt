@@ -118,6 +118,24 @@ fun ElevenNavGraph(
                     navController.navigate("${Route.PRODUCTS}?filter=${android.net.Uri.encode(filter)}")
                 },
                 onViewCategories = { navController.navigate(Route.CATEGORIES) },
+                // ✅ جديد: الضغط على علامة تجارية بالرئيسية — لو لها رابط يُفتح
+                // (خارجي بالمتصفح أو داخلي)، وإلا تُعرض منتجات العلامة.
+                onBrandClick = { brand ->
+                    val link = brand.link.trim()
+                    if (link.startsWith("http://") || link.startsWith("https://")) {
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link)))
+                        } catch (_: Exception) { }
+                    } else if (link.removePrefix("/").isNotBlank()) {
+                        try {
+                            navController.navigate(link.removePrefix("/"))
+                        } catch (_: Exception) { }
+                    } else {
+                        navController.navigate(
+                            "${Route.PRODUCTS}?filter=brands&brand=${android.net.Uri.encode(brand.id)}"
+                        )
+                    }
+                },
                 // ✅ جديد: فكّ رابط البانر (banner.link من لوحة التحكم) — رابط
                 // خارجي كامل (http/https) يُفتح بمتصفح خارجي، وأي شيء آخر
                 // يُعامَل كمسار داخلي للتطبيق (بعد إزالة الشرطة الأولى إن

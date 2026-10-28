@@ -132,13 +132,29 @@ fun CartScreen(
                             .navigationBarsPadding()
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        ElevenButton(
-                            text = "المتابعة للدفع",
-                            onClick = onCheckout,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp),
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            // ✅ الإجمالي ظاهر دائماً بجانب الزر دون حجز مساحة كبيرة
+                            Column {
+                                Text("الإجمالي", fontSize = 12.sp, color = MutedForeground)
+                                Text(
+                                    formatPrice(grandTotal),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            ElevenButton(
+                                text = "المتابعة للدفع",
+                                onClick = onCheckout,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -251,6 +267,49 @@ fun CartScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                // ✅ شريط التقدّم نحو الشحن المجاني (يظهر فقط لو الحد مفعّل بالإعدادات)
+                val freeMin = storeSettings.freeShippingMinOrder
+                if (freeMin > 0) {
+                    item(key = "free-shipping-progress") {
+                        val remaining = (freeMin - cartTotal).coerceAtLeast(0.0)
+                        val progress = (cartTotal / freeMin).toFloat().coerceIn(0f, 1f)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                                .border(1.dp, Border, RoundedCornerShape(16.dp))
+                                .padding(14.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Filled.LocalShipping,
+                                    contentDescription = null,
+                                    tint = if (remaining == 0.0) Success else MutedForeground,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (remaining == 0.0) "🎉 حصلت على شحن مجاني"
+                                    else "أضف ${formatPrice(remaining)} للحصول على شحن مجاني",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(50)),
+                                color = if (remaining == 0.0) Success else Accent,
+                                trackColor = Border,
+                            )
+                        }
+                    }
+                }
+
                 // عدد المنتجات
                 item {
                     Text(

@@ -117,6 +117,8 @@ fun HomeScreen(
     // تجارية مخصّصة (شبكة بطاقات بصورة) بدل صفحة المنتجات العامة بلا فلتر
     // — تصفح بصري مباشر بدل الاعتماد على منسدل الفلاتر داخل شاشة المنتجات.
     onViewCategories: () -> Unit,
+    // ✅ جديد: الضغط على علامة تجارية — رابطها (brand.link) إن وُجد، وإلا منتجاتها
+    onBrandClick: (Brand) -> Unit = {},
     // ✅ جديد: يُستدعى عند الضغط على بانر/زر بانر يحمل رابطاً (banner.link)
     // — مسار داخلي مثل "/product/xxx" أو "/category/xxx"، أو رابط خارجي كامل
     // (https://...). المنطق الفعلي لفكّ هذا الرابط (تنقّل داخلي أو فتح متصفح)
@@ -347,7 +349,7 @@ fun HomeScreen(
                 // المنتجات بفلتر "brands" المجرَّد — نفس شاشة تصفّح واحدة
                 // لكل من التصنيفات والعلامات، بدل وجهتين مختلفتين لهما.
                 HomeSectionHeader(title = "العلامات التجارية", onViewAll = onViewCategories)
-                BrandsRow(brands = brands)
+                BrandsRow(brands = brands, onBrandClick = onBrandClick)
                 Spacer(Modifier.height(8.dp))
                 }
             }
@@ -840,7 +842,7 @@ private fun ProductRow(
 // ══════════════════════════════════════════════════════════════
 
 @Composable
-private fun BrandsRow(brands: List<Brand>) {
+private fun BrandsRow(brands: List<Brand>, onBrandClick: (Brand) -> Unit) {
     // ✅ إصلاح: Row العادي بالتصميم السابق كان يقصّ العلامات على أول 4 نهائياً
     // (weight بيملأ العرض بالضبط بلا سحب) — أي علامة إضافية لا تظهر إطلاقاً
     // ولا طريقة للوصول لها. رجعناها LazyRow قابلة للسحب، لكن بعرض بطاقة ثابت
@@ -854,8 +856,10 @@ private fun BrandsRow(brands: List<Brand>) {
             Box(
                 modifier = Modifier
                     .size(80.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                    .border(1.dp, Border, RoundedCornerShape(12.dp)),
+                    .border(1.dp, Border, RoundedCornerShape(12.dp))
+                    .clickable { onBrandClick(brand) },
                 contentAlignment = Alignment.Center,
             ) {
                 if (brand.logo.isNotBlank()) {

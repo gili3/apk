@@ -46,8 +46,8 @@ enum class SnackbarType { SUCCESS, ERROR, WARNING, INFO }
 private class TypedSnackbarVisuals(
     override val message: String,
     val type: SnackbarType,
+    override val actionLabel: String? = null,
 ) : SnackbarVisuals {
-    override val actionLabel: String? = null
     override val withDismissAction: Boolean = false
     override val duration: SnackbarDuration = SnackbarDuration.Short
 }
@@ -56,7 +56,8 @@ private class TypedSnackbarVisuals(
 suspend fun SnackbarHostState.showMessage(
     message: String,
     type: SnackbarType = SnackbarType.INFO,
-): SnackbarResult = showSnackbar(TypedSnackbarVisuals(message, type))
+    actionLabel: String? = null,
+): SnackbarResult = showSnackbar(TypedSnackbarVisuals(message, type, actionLabel))
 
 private data class SnackbarPalette(val bg: Color, val fg: Color, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 
@@ -78,6 +79,13 @@ fun ElevenSnackbarHost(hostState: SnackbarHostState) {
             shape = RoundedCornerShape(16.dp),
             containerColor = palette.bg,
             contentColor = palette.fg,
+            action = visuals.actionLabel?.let { label ->
+                {
+                    androidx.compose.material3.TextButton(onClick = { data.performAction() }) {
+                        Text(label, color = palette.fg, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+                    }
+                }
+            },
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(palette.icon, null, tint = palette.fg, modifier = Modifier)

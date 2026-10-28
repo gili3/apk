@@ -1,0 +1,1123 @@
+package com.eleven.store.ui.viewmodel
+
+import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.eleven.store.data.model.*
+import com.eleven.store.data.repository.EmailNotVerifiedException
+import com.eleven.store.data.repository.FirestoreRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+
+class MainViewModel : ViewModel() {
+
+    val repo = FirestoreRepository()
+
+    // ✅ جديد: ترتيب "متداخل" حسب الفئة بدل الاعتماد الحرفي على ترتيب
+    // Firestore (createdAt تنازلياً) — الذي كان يسبب ظهور عدة منتجات من نفس
+    // الفئة متتالية (مثلاً عدة عطور ثم الانتقال للمكياج) لأن المنتجات
+    // المضافة معاً زمنياً غالباً من نفس الفئة. الحل: تجميع المنتجات حسب
+    // categoryId (مع الحفاظ على ترتيبها الأصلي — أي الأحدث أولاً — داخل كل
+    // فئة)، ثم "توزيع دائري" Round-Robin بين الفئات بحيث لا يتكرر عنصران من
+    // نفس الفئة متتاليين إلا إذا لم يتبقَّ خيار آخر. هذا يحافظ على منطقية
+    // الترتيب (الأحدث أولاً ضمن كل فئة) بدل ترتيب عشوائي بالكامل.
+    private fun interleaveByCategory(products: List<Product>): List<Product> {
+        if (products.size <= 1) return products
+        val byCategory = LinkedHashMap<String, ArrayDeque<Product>>()
+        for (p in products) {
+            byCategory.getOrPut(p.categoryId) { ArrayDeque() }.add(p)
+        }
+        if (byCategory.size <= 1) return products
+        val queues = byCategory.values.toMutableList()
+        val result = ArrayList<Product>(products.size)
+        var lastIndex = -1
+        while (queues.any { it.isNotEmpty() }) {
+            var picked = false
+            for (step in queues.indices) {
+                val idx = (lastIndex + 1 + step) % queues.size
+                val queue = queues[idx]
+                if (queue.isNotEmpty()) {
+                    result.add(queue.removeFirst())
+                    lastIndex = idx
+                    picked = true
+                    break
+                }
+            }
+            if (!picked) break
+        }
+        return result
+    }
+
+    // ─── Auth ───────────────────────────────────────────────────
+    val currentUser = repo.observeAuthState().stateIn(
+        viewModelScope, SharingStarted.Eagerly, repo.currentUser
+    )
+
+    // ✅ بيانات الملف الشخصي من Firestore (فيها رقم الهاتف الحقيقي)
+    // 🐛 إصلاح: كانت repo.observeUserProfile() تُستدعى مرة واحدة فقط عند
+    // إنشاء الـViewModel (أي عند فتح التطبيق، سواء كان المستخدم مسجّلاً
+    // دخوله أصلاً أم لا). observeUserProfile تقرأ uid لحظة بدء الـFlow فقط:
+    // لو كان المستخدم غير مسجَّل دخوله وقتها، تُرسل null وتتوقف عند
+    // "awaitClose {}" بلا أي إعادة تحقق لاحقة من uid. بما أن هذا الـViewModel
+    // يعيش طوال الجلسة (يُنشأ مرة واحدة بجذر ElevenApp، قبل شاشات الدخول
+    // وبعدها)، أي تسجيل دخول جديد ضمن نفس فتحة التطبيق كان يترك userProfile
+    // عالقاً على null للأبد (رقم الهاتف الحقيقي ما يظهر إلا بعد إغلاق
+    // التطبيق وإعادة فتحه). الآن نربطه بـcurrentUser (تدفّق تسجيل الدخول/
+    // الخروج الحقيقي) عبر flatMapLatest ليعيد فتح المستمع تلقائياً عند أي
+    // تغيّر فعلي بحالة تسجيل الدخول.
+    val userProfile = currentUser.flatMapLatest {
+        repo.observeUserProfile()
+    }.stateIn(
+        viewModelScope, SharingStarted.Eagerly, null
+    )
+
+    fun updateProfile(name: String, phone: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.updateUserProfile(name, phone); onResult(true, null) }
+            catch (e: Exception) { onResult(false, e.message ?: "تعذر حفظ التعديلات") }
+        }
+    }
+
+    // ✅ إصلاح: onResult كان يُرجع (نجاح، رسالة) فقط، فحالة "البريد غير
+    // مؤكَّد" كانت تُعرض كرسالة نصية بلا أي إجراء فوري ممكن (كان يطلب فتح
+    // رابط بريد خارجي). أضفنا معامل ثالث unverifiedEmail (غير فارغ فقط في
+    // هذه الحالة تحديداً) ليقدر LoginScreen يفتح شاشة إدخال رمز التأكيد
+    // مباشرة بدل مجرد نص إرشادي.
+    fun login(email: String, password: String, onResult: (Boolean, String?, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.loginWithEmail(email, password); repo.syncFcmToken(); onResult(true, null, null) }
+            catch (e: EmailNotVerifiedException) {
+                onResult(false, "لم يتم تأكيد بريدك الإلكتروني بعد. أرسلنا رمز تأكيد جديد إلى بريدك.", e.email)
+            }
+            catch (e: Exception) { onResult(false, mapAuthError(e, "فشل تسجيل الدخول"), null) }
+        }
+    }
+
+    // ✅ إصلاح: كانت تعرض e.message الخام من Firebase للمستخدم (إنجليزي، مثل
+    // "The supplied auth credential is incorrect, malformed or has expired").
+    fun changePassword(currentPassword: String, newPassword: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.changePassword(currentPassword, newPassword); onResult(true, null) }
+            catch (e: Exception) {
+                val message = when (e) {
+                    is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> "كلمة المرور الحالية غير صحيحة"
+                    is com.google.firebase.auth.FirebaseAuthWeakPasswordException -> "كلمة المرور الجديدة ضعيفة جداً"
+                    is com.google.firebase.FirebaseTooManyRequestsException -> "تم تجاوز عدد المحاولات، يرجى المحاولة لاحقاً"
+                    is com.google.firebase.FirebaseNetworkException -> "تعذّر الاتصال بالإنترنت، تحقق من اتصالك وحاول مرة أخرى"
+                    else -> "فشل تغيير كلمة المرور، حاول مرة أخرى"
+                }
+                onResult(false, message)
+            }
+        }
+    }
+
+    // ✅ إصلاح: هذه الدوال الثلاث كانت تعرض e.message خام مباشرة للمستخدم.
+    // لو فشل استدعاء الدالة السحابية محلياً قبل وصوله للسيرفر (مثال: توكن
+    // غير صالح مؤقتاً)، e.message يكون نص الكود الداخلي نفسه مثل
+    // "UNAUTHENTICATED" بلا أي ترجمة — وهو تحديداً ما كان يظهر للمستخدم.
+    // mapDeletionError تعرض رسالة عربية مفهومة دائماً بدل ذلك.
+    private fun mapDeletionError(e: Exception, fallback: String): String {
+        val functionsCode = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+        return when {
+            functionsCode == com.google.firebase.functions.FirebaseFunctionsException.Code.UNAUTHENTICATED ->
+                "انتهت صلاحية الجلسة، يرجى تسجيل الخروج والدخول مرة أخرى ثم إعادة المحاولة"
+            e is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> "كلمة المرور غير صحيحة"
+            else -> e.message?.takeIf { it.isNotBlank() && !it.equals("UNAUTHENTICATED", ignoreCase = true) } ?: fallback
+        }
+    }
+
+    fun deleteAccount(currentPassword: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.deleteAccount(currentPassword); onResult(true, null) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر حذف الحساب، حاول مرة أخرى")) }
+        }
+    }
+
+    fun deleteAccountWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.deleteAccountWithGoogle(idToken); onResult(true, null) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر حذف الحساب، حاول مرة أخرى")) }
+        }
+    }
+
+    // ✅ جديد: الخطوة الأخيرة من حذف الحساب — يُستدعى بعد أن ينجح
+    // deleteAccount/deleteAccountWithGoogle أعلاه (اللتان أصبحتا الآن تطلبان
+    // فقط رمز تأكيد ولا تحذفان شيئاً بعد) ويُدخل المستخدم الرمز الذي وصله.
+    fun confirmAccountDeletion(otp: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmAccountDeletion(otp); onResult(true, null) }
+            catch (e: Exception) { onResult(false, mapDeletionError(e, "تعذّر تأكيد الحذف، حاول مرة أخرى")) }
+        }
+    }
+
+    fun isCurrentUserGoogleAccount(): Boolean = repo.isCurrentUserGoogleAccount()
+
+    // ✅ إصلاح: registerWithEmail تُسجّل الخروج تلقائياً بعد إنشاء الحساب
+    // (التحقق أصبح إجبارياً)، فاستدعاء syncFcmToken بعدها كان سيفشل بصمت
+    // لعدم وجود مستخدم مسجَّل دخول فعلياً.
+    // ✅ إصلاح: onResult كان يُرجع (نجاح، رسالة خطأ) فقط، فنجاح إنشاء الحساب
+    // مع فشل إرسال رابط التأكيد كان يبان مطابقاً تماماً لنجاح كامل. أضفنا
+    // معامل ثالث verificationEmailSent (افتراضي true، غير ذي معنى عند
+    // onResult(false, ...)) عشان الشاشة تقدر تعرض تنبيهاً صادقاً بدل ما
+    // تفترض دايماً إن الرسالة وصلت.
+    // ✅ تشخيص: أضفنا معامل رابع verificationEmailErrorDetail (وصف الاستثناء
+    // الفعلي من describeMailException، مثل "FirebaseFunctionsException
+    // (UNAUTHENTICATED): ..." أو "FirebaseNetworkException: ...") ليقدر
+    // الاستدعاء الأعلى (الشاشة) يعرضه مباشرة بدل الاكتفاء بـLog.w المحلي
+    // غير المتاح بدون Logcat.
+    fun register(
+        name: String,
+        email: String,
+        phone: String,
+        password: String,
+        onResult: (Boolean, String?, Boolean, String?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            try {
+                val outcome = repo.registerWithEmail(name, email, phone, password)
+                onResult(true, null, outcome.verificationEmailSent, outcome.verificationEmailError)
+            } catch (e: Exception) {
+                onResult(false, mapAuthError(e, "فشل إنشاء الحساب، يرجى المحاولة مرة أخرى"), true, null)
+            }
+        }
+    }
+
+    // ✅ جديد: إعادة إرسال رابط تأكيد البريد الإلكتروني من شاشة الإعدادات
+    // ✅ تشخيص: onResult ترجع الآن رسالة الخطأ الفعلية (e.message من
+    // resendEmailVerification أصبحت وصف الاستثناء نفسه بعد التعديل بالأعلى)
+    // بدل رسالة عامة ثابتة تخفي السبب الحقيقي.
+    // ✅ إصلاح (تحفّظ بعد حل مشكلة UNAUTHENTICATED): كانت e.message تُمرَّر
+    // خام للواجهة — كان هذا مفيداً وقت التشخيص، لكن يعرض نص استثناء تقني
+    // لمستخدم حقيقي بلا فائدة له. الآن: رسالة عامة دائماً للواجهة، والتفاصيل
+    // الفعلية مسجّلة أصلاً بـLog.w داخل FirestoreRepository.resendEmailVerification
+    // (متاحة بـLogcat وقت التطوير عند الحاجة).
+    fun resendEmailVerification(onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.resendEmailVerification(); onResult(true, null) }
+            catch (e: Exception) { onResult(false, "تعذّر إرسال رابط التأكيد، حاول لاحقاً") }
+        }
+    }
+
+    // ✅ إصلاح: كانت تبلع الاستثناء وتعرض رسالة واحدة ثابتة مهما كان السبب
+    // (حساب محظور، تعارض مع طريقة دخول أخرى، انقطاع شبكة...) ولا تسجّله بأي
+    // مكان — فيستحيل معرفة سبب فشل "الدخول بجوجل". الآن رسالة مناسبة لكل حالة،
+    // والأخطاء غير المتوقعة تظهر بسجل الأخطاء بلوحة التحكم.
+    fun signInWithGoogle(idToken: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.signInWithGoogleIdToken(idToken)
+                repo.syncFcmToken()
+                onResult(true, null)
+            } catch (e: Exception) {
+                val message = when (e) {
+                    is com.google.firebase.FirebaseNetworkException ->
+                        "تعذّر الاتصال بالإنترنت، تحقق من اتصالك وحاول مرة أخرى"
+                    is com.google.firebase.auth.FirebaseAuthInvalidUserException ->
+                        if (e.errorCode == "ERROR_USER_DISABLED") "الحساب محظور" else "لا يوجد حساب مرتبط بهذا البريد الإلكتروني"
+                    is com.google.firebase.auth.FirebaseAuthUserCollisionException ->
+                        "هذا البريد مسجَّل بطريقة دخول أخرى، سجّل الدخول بها أولاً"
+                    is com.google.firebase.FirebaseTooManyRequestsException ->
+                        "تم تجاوز عدد المحاولات، يرجى المحاولة لاحقاً"
+                    else -> "فشل تسجيل الدخول عبر Google"
+                }
+                if (e !is com.google.firebase.FirebaseNetworkException) {
+                    com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "signInWithGoogle")
+                }
+                onResult(false, message)
+            }
+        }
+    }
+
+    // ✅ رسائل خطأ دخول محدّدة وواضحة — بما فيها تمييز الحساب المحظور
+    // (ERROR_USER_DISABLED، يصدر عن حسابات عطّلها الأدمن من لوحة التحكم
+    // عبر setUserDisabled) عن الحساب غير المسجَّل أصلاً (ERROR_USER_NOT_FOUND)
+    // — كانا يظهران برسالة واحدة مطابقة سابقاً رغم اختلاف السبب الفعلي تماماً.
+    private fun mapAuthError(e: Exception, fallback: String): String {
+        return when (e) {
+            is com.google.firebase.auth.FirebaseAuthInvalidUserException -> when (e.errorCode) {
+                "ERROR_USER_DISABLED" -> "الحساب محظور"
+                else -> "لا يوجد حساب مرتبط بهذا البريد الإلكتروني"
+            }
+            is com.google.firebase.auth.FirebaseAuthUserCollisionException -> "البريد الإلكتروني مستخدم بالفعل"
+            is com.google.firebase.auth.FirebaseAuthWeakPasswordException -> "كلمة المرور ضعيفة جداً"
+            is com.google.firebase.auth.FirebaseAuthInvalidCredentialsException -> when (e.errorCode) {
+                "ERROR_WRONG_PASSWORD" -> "كلمة المرور غير صحيحة"
+                "ERROR_INVALID_EMAIL" -> "البريد الإلكتروني غير صحيح"
+                else -> fallback
+            }
+            is com.google.firebase.FirebaseTooManyRequestsException -> "تم تجاوز عدد المحاولات، يرجى المحاولة لاحقاً"
+            else -> fallback
+        }
+    }
+
+    // ✅ إصلاح: استبدال رابط إعادة التعيين برمز (OTP) — خطوتان منفصلتان
+    // الآن: طلب الرمز، ثم تأكيده مع كلمة المرور الجديدة معاً.
+    fun requestPasswordResetOtp(email: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try { repo.requestPasswordResetOtp(email); onResult(true) }
+            catch (e: Exception) { onResult(false) }
+        }
+    }
+
+    fun confirmPasswordResetOtp(email: String, otp: String, newPassword: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmPasswordResetOtp(email, otp, newPassword); onResult(true, null) }
+            catch (e: Exception) {
+                val code = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+                val msg = when (code) {
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED ->
+                        "انتهت صلاحية الرمز، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+                        "عدد محاولات كبير جداً، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT ->
+                        e.message ?: "رمز التأكيد غير صحيح"
+                    else -> "تعذّر إعادة تعيين كلمة المرور، حاول مرة أخرى"
+                }
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // ✅ جديد: تأكيد البريد بالرمز من شاشة إدخال الرمز (بلا جلسة مسجَّلة)
+    fun confirmEmailVerificationOtp(email: String, otp: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.confirmEmailVerificationOtp(email, otp); onResult(true, null) }
+            catch (e: Exception) {
+                val code = (e as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+                val msg = when (code) {
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED ->
+                        "انتهت صلاحية الرمز، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+                        "عدد محاولات كبير جداً، يرجى طلب رمز جديد"
+                    com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT ->
+                        e.message ?: "رمز التأكيد غير صحيح"
+                    else -> "تعذّر تأكيد البريد، حاول مرة أخرى"
+                }
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun resendEmailVerificationOtpByEmail(email: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try { repo.resendEmailVerificationOtpByEmail(email); onResult(true) }
+            catch (e: Exception) { onResult(false) }
+        }
+    }
+
+    // ✅ تعديل: logout() بالريبوزيتوري أصبحت suspend (تحذف توكن FCM الخاص
+    // بالجهاز من Firestore قبل تسجيل الخروج)، لذا يجب استدعاؤها من كوروتين.
+    fun logout() {
+        viewModelScope.launch {
+            repo.logout()
+        }
+    }
+
+    // ─── Store Data ─────────────────────────────────────────────
+    private val _storeSettings = MutableStateFlow(StoreSettings())
+    val storeSettings: StateFlow<StoreSettings> = _storeSettings
+
+    private val _banners = MutableStateFlow<List<Banner>>(emptyList())
+    val banners: StateFlow<List<Banner>> = _banners
+
+    // ✅ جديد: حالة تحميل/خطأ خاصة بالبانر وحده (راجع loadHomeData أدناه) —
+    // بانر بطيء أو فاشل لم يعد يمنع ظهور التصنيفات/المنتجات، ولا العكس.
+    private val _bannersLoading = MutableStateFlow(true)
+    val bannersLoading: StateFlow<Boolean> = _bannersLoading
+    private val _bannersError = MutableStateFlow<String?>(null)
+    val bannersError: StateFlow<String?> = _bannersError
+
+    private val _categories = MutableStateFlow<List<Category>>(emptyList())
+    val categories: StateFlow<List<Category>> = _categories
+
+    private val _brands = MutableStateFlow<List<Brand>>(emptyList())
+    val brands: StateFlow<List<Brand>> = _brands
+
+    // ✅ جديد: التصنيفات والعلامات التجارية تُحمَّلان معاً (نفس الفئة من
+    // البيانات: فلاتر/تصنيف) لكن بحالة مستقلة تماماً عن البانر والمنتجات.
+    private val _categoriesLoading = MutableStateFlow(true)
+    val categoriesLoading: StateFlow<Boolean> = _categoriesLoading
+    private val _categoriesError = MutableStateFlow<String?>(null)
+    val categoriesError: StateFlow<String?> = _categoriesError
+
+    // ─── Products ───────────────────────────────────────────────
+    private val _featuredProducts = MutableStateFlow<List<Product>>(emptyList())
+    val featuredProducts: StateFlow<List<Product>> = _featuredProducts
+
+    private val _newArrivals = MutableStateFlow<List<Product>>(emptyList())
+    val newArrivals: StateFlow<List<Product>> = _newArrivals
+
+    private val _bestSellers = MutableStateFlow<List<Product>>(emptyList())
+    val bestSellers: StateFlow<List<Product>> = _bestSellers
+
+    private val _onSaleProducts = MutableStateFlow<List<Product>>(emptyList())
+    val onSaleProducts: StateFlow<List<Product>> = _onSaleProducts
+
+    // ✅ جديد: حالة تحميل/خطأ مستقلة لأقسام منتجات الرئيسية الأربعة معاً
+    // (مميزة/جديدة/الأكثر مبيعاً/عروض) — منفصلة عن البانر والتصنيفات تماماً.
+    private val _homeProductsLoading = MutableStateFlow(true)
+    val homeProductsLoading: StateFlow<Boolean> = _homeProductsLoading
+    private val _homeProductsError = MutableStateFlow<String?>(null)
+    val homeProductsError: StateFlow<String?> = _homeProductsError
+
+    private val _allProducts = MutableStateFlow<List<Product>>(emptyList())
+    val allProducts: StateFlow<List<Product>> = _allProducts
+
+    // ✅ جديد (Pagination/Infinite Scroll): هل توجد صفحة منتجات تالية،
+    // وحالة تحميلها — منفصلة عن isLoading/الصفحة الأولى حتى لا يظهر سبينر
+    // ملء الشاشة عند التمرير لأسفل لتحميل المزيد فقط.
+    private val _hasMoreProducts = MutableStateFlow(false)
+    val hasMoreProducts: StateFlow<Boolean> = _hasMoreProducts
+
+    private val _isLoadingMoreProducts = MutableStateFlow(false)
+    val isLoadingMoreProducts: StateFlow<Boolean> = _isLoadingMoreProducts
+
+    // آخر معاملات فلترة/بحث مُستخدَمة بـloadProducts — تُستخدَم في
+    // loadMoreProducts() لطلب الصفحة التالية بنفس الفلاتر بالضبط.
+    private var lastProductsQuery: ProductsQueryParams? = null
+
+    data class ProductsQueryParams(
+        val categoryId: String?,
+        val isFeatured: Boolean?,
+        val isNew: Boolean?,
+        val isBestSeller: Boolean?,
+        val onSale: Boolean?,
+        val brandId: String?,
+        val searchQuery: String?,
+    )
+
+    private val _selectedProduct = MutableStateFlow<Product?>(null)
+    val selectedProduct: StateFlow<Product?> = _selectedProduct
+
+    // يميّز بين "لا يزال يحمّل" و"لم يتم العثور على المنتج" — مطابق لتمييز
+    // isLoading / error || !product في ProductDetail.tsx بالموقع
+    private val _isProductLoading = MutableStateFlow(false)
+    val isProductLoading: StateFlow<Boolean> = _isProductLoading
+
+    // ─── Cart ───────────────────────────────────────────────────
+    // ✅ إصلاح: onError يُبلَّغ هنا (نفس نمط الإشعارات) بدل أن يُعامَل أي خطأ
+    // لحظي بمستمع Firestore كـ"سلة فارغة" صامتة — بدونه يختفي زر "إتمام
+    // الشراء" فجأة عند أي انقطاع اتصال قصير، رغم أن السلة تحتوي عناصر فعلياً.
+    // _cartRetryTrigger يسمح بإعادة فتح مستمع جديد فعلياً عند "إعادة المحاولة"
+    // (وليس فقط مسح رسالة الخطأ)، لأن بعض الأخطاء (صلاحيات مثلاً) توقف
+    // المستمع القديم نهائياً ولا يكفي انتظار عودة الاتصال وحده.
+    private val _cartError = MutableStateFlow<String?>(null)
+    val cartError: StateFlow<String?> = _cartError
+    private val _cartRetryTrigger = MutableStateFlow(0)
+
+    // 🐛 إصلاح: نفس مشكلة userProfile أعلاه بالضبط — _cartRetryTrigger وحده
+    // لا يتغيّر تلقائياً عند تسجيل الدخول، فقط عند ضغط المستخدم "إعادة
+    // المحاولة" يدوياً. أي مستخدم يسجّل حساباً جديداً أو يدخل لأول مرة ضمن
+    // نفس فتحة التطبيق كان يرى سلّة فارغة دائماً (حتى لو فيها عناصر فعلية
+    // بـFirestore) لأن المستمع فُتح أصلاً وuid=null قبل تسجيل الدخول ولم
+    // يُعَد فتحه. الآن combine مع currentUser يضمن إعادة الفتح تلقائياً عند
+    // الدخول/الخروج، مع إبقاء retryCart() يدوياً لحالات فشل الشبكة اللحظية.
+    val cartItems: StateFlow<List<CartItem>> = combine(_cartRetryTrigger, currentUser) { _, _ -> Unit }
+        .flatMapLatest {
+            repo.observeCart(onError = { e -> _cartError.value = e.message ?: "تعذّر تحميل السلة" })
+                .onEach { _cartError.value = null }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun retryCart() {
+        _cartError.value = null
+        _cartRetryTrigger.value++
+    }
+
+    val cartCount: StateFlow<Int> = cartItems
+        .map { it.sumOf { item -> item.quantity } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    // تم إصلاح: استخدام Double مباشرة
+    val cartTotal: StateFlow<Double> = cartItems
+        .map { items ->
+            items.sumOf { item ->
+                item.price * item.quantity  // price هو Double في CartItem
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0.0)
+
+    // ─── Favorites ──────────────────────────────────────────────
+    // ✅ إصلاح: نفس نمط السلة أعلاه — خطأ لحظي لم يعد يُترجَم زوراً إلى
+    // "لا توجد مفضّلة"، ومع trigger لإعادة فتح مستمع جديد فعلياً عند إعادة المحاولة.
+    private val _favoritesError = MutableStateFlow<String?>(null)
+    val favoritesError: StateFlow<String?> = _favoritesError
+    private val _favoritesRetryTrigger = MutableStateFlow(0)
+
+    // 🐛 إصلاح: نفس مشكلة cartItems أعلاه — ربط بـcurrentUser بدل الاعتماد
+    // فقط على retry اليدوي، حتى تتحدّث المفضّلة تلقائياً بعد تسجيل الدخول.
+    val favoriteIds: StateFlow<Set<String>> = combine(_favoritesRetryTrigger, currentUser) { _, _ -> Unit }
+        .flatMapLatest {
+            repo.observeFavorites(onError = { e -> _favoritesError.value = e.message ?: "تعذّر تحميل المفضلة" })
+                .onEach { _favoritesError.value = null }
+        }.map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    fun retryFavorites() {
+        _favoritesError.value = null
+        _favoritesRetryTrigger.value++
+    }
+
+    // ✅ جديد: بيانات منتجات المفضلة الكاملة (اسم/سعر/صورة/مخزون) مجلوبة
+    // مباشرة من مستند كل منتج — تماماً مثل getFavorites بالموقع، بدل
+    // الاعتماد على allProducts (انظر شرح الإصلاح في FirestoreRepository
+    // .getFavoriteProducts). تُحدَّث كلما تغيّرت مجموعة المفضّلة.
+    private val _favoriteProducts = MutableStateFlow<List<Product>>(emptyList())
+    val favoriteProducts: StateFlow<List<Product>> = _favoriteProducts
+
+    private val _favoritesLoading = MutableStateFlow(false)
+    val favoritesLoading: StateFlow<Boolean> = _favoritesLoading
+
+    // ✅ إصلاح: getFavoriteProducts() صارت ترفع الاستثناء بدل ابتلاعه (انظر
+    // FirestoreRepository) — لازم نمسكه هنا ونميّزه، بدل انهيار كامل للتطبيق
+    // أو (كما كان سابقاً) إظهار "لا توجد مفضلة" وهمية عند أي خطأ شبكة.
+    private val _favoriteProductsError = MutableStateFlow<String?>(null)
+    val favoriteProductsError: StateFlow<String?> = _favoriteProductsError
+
+    init {
+        viewModelScope.launch {
+            favoriteIds.collect { loadFavoriteProducts() }
+        }
+    }
+
+    fun loadFavoriteProducts() {
+        viewModelScope.launch {
+            _favoritesLoading.value = true
+            _favoriteProductsError.value = null
+            try {
+                _favoriteProducts.value = repo.getFavoriteProducts()
+            } catch (e: Exception) {
+                _favoriteProductsError.value = e.message ?: "تعذّر تحميل المفضلة"
+            } finally {
+                _favoritesLoading.value = false
+            }
+        }
+    }
+
+    // ─── Orders ─────────────────────────────────────────────────
+    private val _orders = MutableStateFlow<List<Order>>(emptyList())
+    val orders: StateFlow<List<Order>> = _orders
+
+    // ✅ جديد: هل اكتمل تحميل الطلبات فعلياً؟ (شاشة الطلبات كانت تستخدم isLoading
+    // الخاص بالمنتجات — فتعرض سبينر عند تحميل المنتجات، و"لا توجد طلبات" قبل
+    // انتهاء تحميل الطلبات.)
+    private val _ordersLoaded = MutableStateFlow(false)
+    val ordersLoaded: StateFlow<Boolean> = _ordersLoaded
+
+    // ✅ جديد: عند تغيّر المستخدم (خروج/دخول بحساب آخر) نمسح الطلبات المخزّنة
+    // حتى لا تظهر طلبات الحساب السابق للحساب الجديد.
+    init {
+        viewModelScope.launch {
+            currentUser.map { it?.uid }.distinctUntilChanged().collect {
+                _orders.value = emptyList()
+                _ordersLoaded.value = false
+            }
+        }
+    }
+
+    private val _selectedOrder = MutableStateFlow<Order?>(null)
+    val selectedOrder: StateFlow<Order?> = _selectedOrder
+
+    // ─── Addresses ──────────────────────────────────────────────
+    private val _addresses = MutableStateFlow<List<Address>>(emptyList())
+    val addresses: StateFlow<List<Address>> = _addresses
+
+    // ✅ جديد: getAddresses لم تعد تبلع الفشل بصمت (راجع الإصلاح بـ
+    // FirestoreRepository) — هذه القناة تنقل رسالة الخطأ الودّية للشاشة
+    // لعرضها (Snackbar) بدل ترك قائمة العناوين تبدو "فارغة فعلاً" أثناء فشل
+    // مؤقت، ما قد يدفع المستخدم لإدخال عنوانه من جديد ظناً أنه لم يُحفَظ.
+    private val _addressesError = MutableStateFlow<String?>(null)
+    val addressesError: StateFlow<String?> = _addressesError
+    fun consumeAddressesError() { _addressesError.value = null }
+
+    // ─── Notifications ──────────────────────────────────────────
+    private val _notifications = MutableStateFlow<List<NotificationItem>>(emptyList())
+    val notifications: StateFlow<List<NotificationItem>> = _notifications
+
+    // ✅ v2: عداد "غير المقروء" الحقيقي — منفصل تماماً عن _notifications
+    // (المحدودة بـlimit(50) بـobserveNotifications)، ومصدره نفس الحقل الذي
+    // يقرأه جرس الإشعارات بالموقع (users/{uid}.notifUnreadCount)، فيتطابق
+    // الرقم المعروض بين المنصتين دائماً حتى لو تجاوز غير المقروء 50 عنصراً.
+    // Eagerly (كـcartCount/favoriteIds أعلاه): يبدأ فور إنشاء الـViewModel
+    // (أي فور تسجيل الدخول عملياً)، بغض النظر عن زيارة شاشة الإشعارات أم لا
+    // — ليظهر رقم صحيح فوراً على أي badge مستقبلي (هيدر/تبويب سفلي).
+    // 🐛 إصلاح: كانت مربوطة مباشرة بدون أي إعادة اشتراك — نفس علّة
+    // userProfile/cartItems/favoriteIds: مستمع وحيد يُفتح لحظة إنشاء
+    // الـViewModel، فلو لم يكن هناك تسجيل دخول وقتها يبقى العداد عالقاً على
+    // 0 حتى بعد الدخول لاحقاً بنفس الجلسة. الآن يُعاد فتحه تلقائياً مع
+    // currentUser.
+    val unreadCount: StateFlow<Int> = currentUser.flatMapLatest { repo.observeUnreadCount() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    // ✅ إصلاح: كان أي خطأ بمستمع الإشعارات (مثال: فهرس Firestore مركّب غير
+    // مُفعّل بعد لمجموعة notifications) يُكتب فقط بالـLog ولا يظهر للمستخدم
+    // إطلاقاً — القائمة تبقى فارغة للأبد بدون أي تفسير أو طريقة لإعادة المحاولة.
+    private val _notificationsLoading = MutableStateFlow(false)
+    val notificationsLoading: StateFlow<Boolean> = _notificationsLoading
+
+    private val _notificationsError = MutableStateFlow<String?>(null)
+    val notificationsError: StateFlow<String?> = _notificationsError
+
+    // ─── Loading / Error ────────────────────────────────────────
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
+    // ─── Init ───────────────────────────────────────────────────
+    init { loadHomeData() }
+
+    // ✅ إعادة تصميم (بناءً على طلب مباشر): كانت كل بيانات الرئيسية الثمانية
+    // (إعدادات المتجر/بانر/تصنيفات/علامات/4 أقسام منتجات) تُطلَق بالتوازي
+    // فعلاً (async{}) لكن تُقرأ (await) بالتسلسل داخل try/catch واحد مشترك —
+    // فإذا فشل أي طلب مبكّر بالترتيب (مثلاً البانر)، تُرمى استثناءً *قبل*
+    // الوصول لقراءة نتيجة أقسام لاحقة كانت قد نجحت فعلياً بالتوازي، فتُهدَر
+    // بياناتها وتظهر الرئيسية شبه فارغة رغم نجاح أغلب الطلبات. الآن: 3 عمليات
+    // تحميل مستقلة تماماً (بانر / تصنيفات+علامات / منتجات)، كل منها بحالة
+    // تحميل وخطأ خاصة به وتُعاد محاولتها بمفردها — فشل قسم واحد أو بطؤه لا
+    // يؤخر ولا يُخفي الأقسام الأخرى الناجحة.
+    fun loadHomeData() {
+        viewModelScope.launch { repo.getStoreSettings().let { _storeSettings.value = it } }
+        loadBanners()
+        loadCategoriesAndBrands()
+        loadHomeProducts()
+    }
+
+    fun loadBanners() {
+        viewModelScope.launch {
+            _bannersLoading.value = true
+            _bannersError.value = null
+            try {
+                _banners.value = repo.getBanners()
+            } catch (e: Exception) {
+                _bannersError.value = repo.friendlyLoadError(e)
+            } finally {
+                _bannersLoading.value = false
+            }
+        }
+    }
+
+    fun loadCategoriesAndBrands() {
+        viewModelScope.launch {
+            _categoriesLoading.value = true
+            _categoriesError.value = null
+            try {
+                val categoriesDeferred = async { repo.getCategories() }
+                val brandsDeferred = async { repo.getBrands() }
+                _categories.value = categoriesDeferred.await()
+                _brands.value = brandsDeferred.await()
+            } catch (e: Exception) {
+                _categoriesError.value = repo.friendlyLoadError(e)
+            } finally {
+                _categoriesLoading.value = false
+            }
+        }
+    }
+
+    fun loadHomeProducts() {
+        viewModelScope.launch {
+            _homeProductsLoading.value = true
+            _homeProductsError.value = null
+            try {
+                val featuredDeferred = async { repo.getProducts(isFeatured   = true, limit = 10) }
+                val newDeferred      = async { repo.getProducts(isNew        = true, limit = 10) }
+                val bestDeferred     = async { repo.getProducts(isBestSeller = true, limit = 10) }
+                val onSaleDeferred   = async { repo.getProducts(onSale       = true, limit = 10) }
+                // إخفاء المنتجات منتهية الكمية من جميع أقسام الصفحة الرئيسية
+                // ✅ + ترتيب متداخل حسب الفئة (انظر شرح interleaveByCategory) بدل
+                // ترتيب Firestore الخام (الأحدث فقط) الذي يجمّع فئة واحدة متتالية
+                _featuredProducts.value = interleaveByCategory(featuredDeferred.await().filter { it.stock > 0 })
+                _newArrivals.value      = interleaveByCategory(newDeferred.await().filter { it.stock > 0 })
+                _bestSellers.value      = interleaveByCategory(bestDeferred.await().filter { it.stock > 0 })
+                _onSaleProducts.value   = interleaveByCategory(onSaleDeferred.await().filter { it.stock > 0 })
+            } catch (e: Exception) {
+                _homeProductsError.value = repo.friendlyLoadError(e)
+            } finally {
+                _homeProductsLoading.value = false
+            }
+        }
+    }
+
+    fun loadProducts(
+        categoryId:   String?  = null,
+        isFeatured:   Boolean? = null,
+        isNew:        Boolean? = null,
+        isBestSeller: Boolean? = null,
+        onSale:       Boolean? = null,
+        brandId:      String?  = null,
+        searchQuery:  String?  = null,
+    ) {
+        // ✅ صفحة أولى جديدة (فلتر/بحث تغيّر) — نصفّر أي مؤشر ترقيم قديم
+        // (Firestore cursor أو رقم صفحة Algolia) حتى لا تُخلط صفحات فلتر
+        // سابق بفلتر جديد.
+        val params = ProductsQueryParams(categoryId, isFeatured, isNew, isBestSeller, onSale, brandId, searchQuery)
+        lastProductsQuery = params
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _hasMoreProducts.value = false
+            try {
+                // إخفاء المنتجات منتهية الكمية من قائمة المنتجات
+                // ✅ + ترتيب متداخل حسب الفئة — نفس مبدأ الصفحة الرئيسية
+                // (بدون تأثير إن كان selectedCategory محدَّداً لفئة واحدة فقط)
+                _allProducts.value = interleaveByCategory(
+                    repo.getProducts(
+                        categoryId   = categoryId,
+                        isFeatured   = isFeatured,
+                        isNew        = isNew,
+                        isBestSeller = isBestSeller,
+                        onSale       = onSale,
+                        brandId      = brandId,
+                        searchQuery  = searchQuery,
+                    ).filter { it.stock > 0 }
+                )
+                _error.value = repo.lastProductsError
+                _hasMoreProducts.value = repo.lastProductsHasMore
+            } catch (e: Exception) {
+                // ✅ إجراء دفاعي: repo.getProducts() محميّة داخلياً حالياً بالكامل
+                // ولا ترفع استثناءً فعلياً، لكن أي تعديل مستقبلي لا يلتزم بنفس
+                // الانضباط سيسبب انهياراً كاملاً غير متوقَّع بدل رسالة خطأ لطيفة.
+                _error.value = e.message ?: "تعذّر تحميل المنتجات"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    // ✅ جديد (Pagination/Infinite Scroll): يجلب الصفحة التالية بنفس فلاتر/
+    // بحث آخر استدعاء لـloadProducts بالضبط، ويُلحقها بالقائمة الحالية —
+    // بلا سبينر ملء الشاشة (isLoadingMoreProducts منفصلة عن isLoading).
+    fun loadMoreProducts() {
+        val params = lastProductsQuery ?: return
+        if (!_hasMoreProducts.value || _isLoadingMoreProducts.value) return
+        viewModelScope.launch {
+            _isLoadingMoreProducts.value = true
+            try {
+                val nextPage = repo.getProducts(
+                    categoryId   = params.categoryId,
+                    isFeatured   = params.isFeatured,
+                    isNew        = params.isNew,
+                    isBestSeller = params.isBestSeller,
+                    onSale       = params.onSale,
+                    brandId      = params.brandId,
+                    searchQuery  = params.searchQuery,
+                    startAfter   = repo.lastProductsCursor,
+                    algoliaPage  = repo.lastAlgoliaPage,
+                ).filter { it.stock > 0 }
+                // ✅ نُداخل الصفحة الجديدة نفسها فقط قبل إلحاقها (بدل إعادة ترتيب
+                // القائمة كاملة، حتى لا تتحرك عناصر شاهدها المستخدم بالفعل أثناء
+                // التمرير) — قد يتجاور صنفان من نفس الفئة عند حد الصفحتين فقط،
+                // وهذا تنازل بسيط مقبول مقابل استقرار الشبكة أثناء التمرير
+                _allProducts.value = _allProducts.value + interleaveByCategory(nextPage)
+                _hasMoreProducts.value = repo.lastProductsHasMore
+            } catch (e: Exception) {
+                // فشل تحميل صفحة إضافية لا يجب أن يمسح القائمة المعروضة أصلاً —
+                // فقط نوقف مؤشر "جاري التحميل"، والمستخدم يقدر يعيد المحاولة
+                // بالتمرير مجدداً (hasMoreProducts تبقى كما كانت).
+            } finally {
+                _isLoadingMoreProducts.value = false
+            }
+        }
+    }
+
+    fun loadProduct(id: String) {
+        viewModelScope.launch {
+            _isProductLoading.value = true
+            _selectedProduct.value = null
+            try {
+                _selectedProduct.value = repo.getProduct(id)
+            } finally {
+                _isProductLoading.value = false
+            }
+        }
+    }
+
+    fun addToCart(product: Product, quantity: Int = 1, onResult: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                repo.addToCart(
+                    CartItem(
+                        productId = product.id,
+                        name      = product.name,
+                        price     = product.price.toDouble(),  // تحويل Long إلى Double
+                        quantity  = quantity,
+                        image     = product.mainImage,
+                    )
+                )
+                onResult?.invoke(true, null)
+            } catch (e: Exception) {
+                onResult?.invoke(false, e.message ?: "تعذر الإضافة إلى السلة")
+            }
+        }
+    }
+
+    // ✅ إصلاح (نفس فئة انهيار addAddress): بلا try/catch، أي استثناء (أشيعه
+    // IOException من requireOnline() عند انقطاع شبكة لحظي) كان ينهار التطبيق
+    // بالكامل عند مجرد حذف عنصر من السلة.
+    fun removeFromCart(productId: String) {
+        viewModelScope.launch {
+            try {
+                repo.removeFromCart(productId)
+            } catch (e: Exception) {
+                _cartError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
+
+    // ✅ (Audit) ضغطتان سريعتان على "+" (شبكة بطيئة، أو ببساطة قبل أن تصل استجابة
+    // Firestore وتُحدِّث حالة الشاشة) كانتا تحسبان newQty من نفس item.quantity القديمة
+    // كلتاهما — والكتابة الثانية لنفس مستند السلة تُلغي الأولى بدل أن تتراكم معها،
+    // فتُفقَد ضغطة كاملة بصمت (زيادة واحدة فقط بدل اثنتين). نفس عائلة علة تكرار
+    // العنوان، لكن بالاتجاه المعاكس (فقدان بدل تكرار). الحل: قفل لكل منتج على حدة
+    // (لا قفل عام يُجمِّد بقية عناصر السلة) يرفض أي ضغطة جديدة على *نفس* المنتج
+    // حتى تكتمل الحالية.
+    private val _pendingQuantityUpdates = MutableStateFlow<Set<String>>(emptySet())
+    val pendingQuantityUpdates: StateFlow<Set<String>> = _pendingQuantityUpdates
+
+    fun updateCartQuantity(item: CartItem, delta: Int, onResult: ((Boolean, String?) -> Unit)? = null) {
+        if (item.productId in _pendingQuantityUpdates.value) return
+        _pendingQuantityUpdates.value = _pendingQuantityUpdates.value + item.productId
+        viewModelScope.launch {
+            val newQty = item.quantity + delta
+            try {
+                if (newQty <= 0) {
+                    repo.removeFromCart(item.productId)
+                    onResult?.invoke(true, null)
+                } else {
+                    // ✅ نفس منطق الموقع: إذا تم تقييد الكمية بحد المخزون (capped) نعرض نفس رسالة الموقع
+                    val capped = repo.updateQuantity(item.productId, newQty)
+                    if (capped) onResult?.invoke(false, "لا يمكن تجاوز الكمية المتوفرة في المخزون")
+                    else onResult?.invoke(true, null)
+                }
+            } catch (e: Exception) {
+                onResult?.invoke(false, e.message ?: "تعذر تحديث الكمية")
+            } finally {
+                _pendingQuantityUpdates.value = _pendingQuantityUpdates.value - item.productId
+            }
+        }
+    }
+
+    fun clearCart() {
+        viewModelScope.launch {
+            try {
+                repo.clearCart()
+            } catch (e: Exception) {
+                _cartError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
+
+    // ✅ (Audit) onResult اختياري بلا كسر مواضع الاستدعاء الحالية (أيقونة القلب
+    // في الرئيسية/المنتجات لا تحتاجه، تكفيها _favoritesError + إعادة رسم الأيقونة
+    // من observeFavorites) — لكن أي مكان يعرض نص نجاح صريح ("تمت الإزالة من
+    // المفضلة") يجب أن ينتظر النتيجة الفعلية، لا أن يفترضها فور الضغط.
+    fun toggleFavorite(productId: String, onResult: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                repo.toggleFavorite(productId)
+                onResult?.invoke(true, null)
+            } catch (e: Exception) {
+                val message = repo.friendlySaveError(e)
+                _favoritesError.value = message
+                onResult?.invoke(false, message)
+            }
+        }
+    }
+
+    // ✅ جديد (توحيد سلوك الإشعارات): يميّز "لا يزال يحمّل" عن "الطلب فعلاً
+    // غير موجود/غير مصرَّح بالوصول له" — نفس تمييز isProductLoading أعلاه.
+    // بدونها، OrderDetailScreen كانت تعامل selectedOrder==null دائماً على
+    // أنها "جاري التحميل" (سبينر لا نهائي) حتى لو تأكد الفشل فعلياً.
+    private val _isOrderLoading = MutableStateFlow(false)
+    val isOrderLoading: StateFlow<Boolean> = _isOrderLoading
+
+    // ✅ جديد (توحيد سلوك الإشعارات): رسالة تُعرض مرة واحدة في صفحة
+    // الإشعارات عند التحويل إليها بسبب طلب غير موجود (بدل تركه صامتاً).
+    // "تُستهلك" مرة واحدة فقط (نفس أسلوب pendingNotificationRoute بـ
+    // MainActivity) حتى لا تتكرر عند أي إعادة تركيب لاحقة للشاشة.
+    private val _orderNotFoundMessage = MutableStateFlow<String?>(null)
+    val orderNotFoundMessage: StateFlow<String?> = _orderNotFoundMessage
+    fun setOrderNotFoundMessage(message: String) { _orderNotFoundMessage.value = message }
+    fun consumeOrderNotFoundMessage() { _orderNotFoundMessage.value = null }
+
+    fun loadOrders() {
+        viewModelScope.launch {
+            try {
+                _orders.value = repo.getOrders()
+            } finally {
+                _ordersLoaded.value = true
+            }
+        }
+    }
+
+    fun loadOrder(orderId: String) {
+        viewModelScope.launch {
+            _isOrderLoading.value = true
+            _selectedOrder.value = null
+            try {
+                _selectedOrder.value = repo.getOrder(orderId)
+            } finally {
+                _isOrderLoading.value = false
+            }
+        }
+    }
+
+    // ─── Coupon ─────────────────────────────────────────────────
+    // ✅ حالة مشتركة بين CartScreen و CheckoutScreen (نفس الـ ViewModel عبر شاشات التنقل)
+    // المعاينة هنا فقط للعرض؛ التحقق النهائي والخصم الفعلي يتمّان على السيرفر داخل Cloud Function
+    // `placeOrder` (transaction واحدة بـAdmin SDK) التي تستدعيها repo.placeOrder().
+    var appliedCouponCode by mutableStateOf<String?>(null)
+        private set
+    var appliedCouponDiscount by mutableDoubleStateOf(0.0)
+        private set
+
+    fun validateCoupon(code: String, subtotal: Double, onResult: (CouponResult) -> Unit) {
+        viewModelScope.launch {
+            val result = repo.validateCoupon(code, subtotal)
+            if (result is CouponResult.Valid) {
+                appliedCouponCode = result.coupon.code
+                appliedCouponDiscount = result.discountAmount
+            }
+            onResult(result)
+        }
+    }
+
+    fun clearCoupon() {
+        appliedCouponCode = null
+        appliedCouponDiscount = 0.0
+    }
+
+    fun syncFcmToken() {
+        viewModelScope.launch { repo.syncFcmToken() }
+    }
+
+    // ✅ إصلاح ثغرة رابط الإيصال: يرفع صورة الإيصال فعلياً إلى Firebase Storage
+    // ويُرجع رابط تنزيل حقيقي (بدل تخزين اسم/معرّف الملف المحلي فقط).
+    suspend fun uploadPaymentReceipt(context: android.content.Context, uri: android.net.Uri): String =
+        repo.uploadPaymentReceipt(context, uri)
+
+    // ✅ جديد: راجع تعليق FirestoreRepository.isLocationInDeliveryZone — تحقق
+    // مبكر غير قاطع تستخدمه شاشة اختيار الموقع (AddressFormCard) مباشرة.
+    suspend fun isLocationInDeliveryZone(lat: Double, lng: Double): Boolean =
+        repo.isLocationInDeliveryZone(lat, lng)
+
+    private fun isReportableOrderFailure(e: Exception): Boolean {
+        val code = (e.cause as? com.google.firebase.functions.FirebaseFunctionsException)?.code
+        if (code != null) {
+            return when (code) {
+                com.google.firebase.functions.FirebaseFunctionsException.Code.INTERNAL,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNKNOWN,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.DATA_LOSS,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNIMPLEMENTED,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.NOT_FOUND -> true
+                else -> false
+            }
+        }
+        // IllegalStateException = رسائل تحقق مقصودة من المستودع، وIOException = لا اتصال
+        return e !is IllegalStateException && e !is java.io.IOException
+    }
+
+    fun placeOrder(
+        order: Order,
+        clearCart: Boolean = true,  // ✅ false عند شراء الآن لحماية السلة
+        useCoupon: Boolean = true,  // ✅ false عند شراء الآن — الكوبون يُطبَّق من شاشة السلة فقط
+        onResult: (Boolean, String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            try {
+                val id = repo.placeOrder(order, if (useCoupon) appliedCouponCode else null)
+                // ✅ (Audit) الطلب أُنشئ فعلياً عند هذه النقطة. سابقاً كان فشل تفريغ السلة
+                // (انقطاع شبكة لحظي) يقع بنفس try فيُعرض للمستخدم كـ"فشل الطلب" رغم نجاحه،
+                // فيعيد المحاولة ويتكرّر الطلب (خصم مخزون وإيصال مضاعف). الآن أي فشل تنظيفي
+                // بعد النجاح يُبلَّغ منفصلاً ولا يغيّر نتيجة الطلب.
+                if (clearCart) {  // ✅ لا تمسح السلة عند شراء الآن
+                    try {
+                        repo.clearCart()
+                    } catch (e: Exception) {
+                        _cartError.value = "تم إنشاء طلبك بنجاح، لكن تعذّر تفريغ السلة. أفرغها يدوياً قبل أي طلب جديد"
+                    }
+                }
+                if (useCoupon) clearCoupon()
+                onResult(true, id)
+            } catch (e: Exception) {
+                // ✅ إضافة (بطلب الأدمن): فشل إنشاء طلب فعلي مهم جداً معرفته —
+                // يظهر الآن بصفحة "سجل الأخطاء" بلوحة التحكم، غير قاتل (المستخدم
+                // يرى رسالة الخطأ عادةً ويمكنه المحاولة مرة أخرى، لا كراش).
+                // ✅ نبلّغ فقط عن الأعطال الحقيقية. رفض السيرفر المتوقع (مخزون/كوبون/منطقة توصيل/حد معدل)
+                // وانقطاع الاتصال رسائل تخصّ المستخدم لا الأدمن — كانت تملأ "سجل الأخطاء" بلا فائدة.
+                if (isReportableOrderFailure(e)) {
+                    com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "placeOrder")
+                }
+                onResult(false, e.message ?: "حدث خطأ")
+            }
+        }
+    }
+
+    fun loadAddresses() {
+        viewModelScope.launch {
+            try {
+                _addresses.value = repo.getAddresses()
+            } catch (e: Exception) {
+                _addressesError.value = repo.friendlyLoadError(e)
+            }
+        }
+    }
+
+    fun sendContactMessage(name: String, email: String, subject: String, message: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try { repo.sendContactMessage(name, email, subject, message); onResult(true, null) }
+            catch (e: Exception) { onResult(false, e.message ?: "تعذّر إرسال رسالتك، حاول مرة أخرى") }
+        }
+    }
+
+    // ✅ إصلاح: نفس دوال الحفظ كانت تبتلع سبب الفشل الحقيقي بصمت تام — لا
+    // Log.e ولا CrashReporter (بعكس getAddresses وplaceOrder اللي عندهم
+    // تسجيل فعلي). فأي "تعذر حفظ العنوان" يظهر للمستخدم كان بلا أي أثر
+    // بالـLogcat أو Crashlytics يوضّح السبب الحقيقي (رفض قواعد أمان Firestore،
+    // App Check، أو أي شيء آخر غير مصنَّف كـconnectivity). الآن نسجّل
+    // الاستثناء الفعلي بكل مرة قبل تحويله لرسالة ودّية للمستخدم.
+    fun addAddress(address: Address, onDone: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.addAddress(address)
+                loadAddresses()
+                onDone()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "addAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "addAddress")
+                _addressesError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
+
+    fun updateAddress(id: String, address: Address, onDone: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.updateAddress(id, address)
+                loadAddresses()
+                onDone()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "updateAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "updateAddress")
+                _addressesError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
+
+    fun deleteAddress(id: String) {
+        viewModelScope.launch {
+            try {
+                repo.deleteAddress(id)
+                loadAddresses()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "deleteAddress failed: ${e.message}", e)
+                com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "deleteAddress")
+                _addressesError.value = repo.friendlySaveError(e)
+            }
+        }
+    }
+
+    // ✅ إصلاح: كانت loadNotifications() تجلب القائمة مرّة واحدة فقط (get()) —
+    // أي إشعار جديد يصل والمستخدم فاتح التطبيق لا يظهر لا بالقائمة ولا بعدّاد
+    // "غير مقروء" بالهيدر إلا بعد إعادة تسجيل الدخول أو إعادة فتح شاشة الإشعارات.
+    // الآن تفتح مستمعاً لحظياً (addSnapshotListener عبر observeNotifications) يبقى
+    // شغّالاً طوال حياة الـViewModel ويحدّث القائمة والعدّاد فوراً عند وصول أي إشعار جديد.
+    private var notificationsJob: kotlinx.coroutines.Job? = null
+
+    fun loadNotifications() {
+        notificationsJob?.cancel()
+        _notificationsError.value = null
+        _notificationsLoading.value = true
+        notificationsJob = viewModelScope.launch {
+            repo.observeNotifications(
+                onError = { e ->
+                    _notificationsLoading.value = false
+                    _notificationsError.value = e.message ?: "تعذّر تحميل الإشعارات"
+                }
+            ).collect {
+                _notificationsLoading.value = false
+                _notificationsError.value = null
+                _notifications.value = it
+            }
+        }
+    }
+
+    fun markNotificationRead(notifId: String) {
+        val previous = _notifications.value
+        _notifications.value = previous.map {
+            if (it.id == notifId) it.copy(isRead = true) else it
+        }
+        viewModelScope.launch {
+            try {
+                repo.markNotificationRead(notifId)
+            } catch (e: Exception) {
+                // ✅ إصلاح: التحديث كان "متفائلاً" (optimistic) بلا أي تراجع عند
+                // فشل الكتابة الفعلية على Firestore — تظل القائمة المحلية تُظهر
+                // العنصر كمقروء للأبد رغم أن الخادم لا يزال يعتبره غير مقروء،
+                // فيتعارض هذا مع عداد unreadCount الحقيقي (المُصلَح أعلاه).
+                Log.w("MainViewModel", "فشل تحديث حالة القراءة، سيتم التراجع", e)
+                _notifications.value = previous
+            }
+        }
+    }
+
+    fun markAllNotificationsRead() {
+        val previous = _notifications.value
+        _notifications.value = previous.map { it.copy(isRead = true) }
+        viewModelScope.launch {
+            try {
+                repo.markAllNotificationsRead()
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل تحديد الكل كمقروء، سيتم التراجع", e)
+                _notifications.value = previous
+            }
+        }
+    }
+
+    // ✅ (Audit) onResult يعكس النتيجة الفعلية — سابقاً كان الفشل يتراجع عن التحديث
+    // المتفائل بصمت تام: العنصر المحذوف "يعود" فجأة بلا أي تفسير، بينما المستخدم
+    // رأى توست "تم الحذف" فوراً عند الضغط (الشاشة المستدعية) بصرف النظر عن ذلك.
+    fun deleteNotification(notifId: String, onResult: ((Boolean) -> Unit)? = null) {
+        val previous = _notifications.value
+        _notifications.value = previous.filterNot { it.id == notifId }
+        viewModelScope.launch {
+            try {
+                repo.deleteNotification(notifId)
+                onResult?.invoke(true)
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل حذف الإشعار، سيتم التراجع", e)
+                _notifications.value = previous
+                onResult?.invoke(false)
+            }
+        }
+    }
+
+    // ✅ جديد: حذف كل الإشعارات — مطابق لزر "حذف الكل" في نسخة الموقع.
+    // ✅ إصلاح: لم يكن هناك أي تراجع عند فشل الحذف الفعلي على Firestore
+    // (خلافاً لبقية دوال الإشعارات أعلاه التي تتبع كلها نفس نمط
+    // optimistic update + rollback) — كانت القائمة تظهر فارغة للمستخدم
+    // حتى لو فشلت العملية فعلياً (بلا اتصال مثلاً)، بينما الإشعارات لا تزال
+    // موجودة على الخادم.
+    // ✅ (Audit) نفس إصلاح deleteNotification أعلاه.
+    fun deleteAllNotifications(onResult: ((Boolean) -> Unit)? = null) {
+        val previous = _notifications.value
+        _notifications.value = emptyList()
+        viewModelScope.launch {
+            try {
+                repo.deleteAllNotifications()
+                onResult?.invoke(true)
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "فشل حذف كل الإشعارات، سيتم التراجع", e)
+                _notifications.value = previous
+                onResult?.invoke(false)
+            }
+        }
+    }
+
+    fun clearError() { _error.value = null }
+}

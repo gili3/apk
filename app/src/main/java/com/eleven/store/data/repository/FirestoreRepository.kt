@@ -1,0 +1,1611 @@
+package com.eleven.store.data.repository
+
+import android.content.Context
+import android.net.Uri
+import android.util.Log
+import com.eleven.store.data.model.*
+import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+
+// ✅ جديد: يُرمى عند محاولة دخول بحساب بريد/كلمة مرور لم يؤكَّد بعد — تُستخدم
+// من MainViewModel لعرض رسالة مخصّصة بدل رسالة "فشل تسجيل الدخول" العامة.
+// ✅ يحمل الآن البريد نفسه (email) حتى تقدر الشاشة تفتح مباشرة على شاشة
+// إدخال رمز التأكيد (OTP) بدل الاكتفاء برسالة نصية لا تقدّم أي إجراء فوري.
+class EmailNotVerifiedException(val email: String) : Exception("email not verified")
+
+/**
+ * ✅ جديد: توحيد صيغة بريد Gmail قبل أي استدعاء لـFirebase Auth (تسجيل،
+ * دخول، طلب استعادة كلمة مرور) — جيميل يتجاهل النقاط بالجزء المحلي من
+ * العنوان فعلياً (yxr.249@gmail.com و yxr249@gmail.com نفس صندوق البريد)،
+ * لكن Firebase Auth يعاملهما كحسابين مختلفين تماماً. تطبيق هذا التطبيع في
+ * كل نقطة إنشاء/بحث عن حساب (وليس فقط الدخول) هو ما يضمن أن الحساب
+ * يُنشأ بصيغة واحدة قانونية من الأصل، فتطابقه لاحقاً أي صيغة أخرى بنقاط
+ * مختلفة يكتبها نفس المستخدم. مطابقة تماماً لـnormalizeEmail بملف
+ * lib/email.ts بجهة السيرفر (تُستخدم هناك عند البحث عن الحساب لطلب رمز
+ * استعادة كلمة المرور، حتى تتطابق مع الصيغة القانونية المخزَّنة هنا).
+ */
+internal fun normalizeEmailForAuth(email: String): String {
+    val trimmed = email.trim()
+    val atIndex = trimmed.lastIndexOf('@')
+    if (atIndex <= 0) return trimmed
+    val local = trimmed.substring(0, atIndex)
+    val domain = trimmed.substring(atIndex + 1).lowercase()
+    return if (domain == "gmail.com" || domain == "googlemail.com") {
+        "${local.replace(".", "")}@$domain"
+    } else {
+        "$local@$domain"
+    }
+}
+
+class FirestoreRepository {
+
+    // ✅ v2: لم يعد التطبيق يحتاج معرّف حساب المدير إطلاقاً — إشعار "طلب
+    // جديد" لصاحب المتجر تُنشئه الآن Cloud Function واحدة (onOrderCreated)
+    // تقرأ OWNER_OPEN_ID من إعدادات بيئة Cloud Functions فقط. سابقاً كان
+    // هذا المعرّف مكرَّراً بثلاثة أماكن مستقلة (هنا، env.ts بالسيرفر،
+    // firestore.rules) وكانت نسخة هذا الملف تحديداً متروكة بقيمة Placeholder
+    // حرفية لم تُستبدل أبداً، فلم يكن يصل أي إشعار "طلب جديد" لصاحب المتجر
+    // عن طلبات وصلت من التطبيق. التوحيد بمصدر واحد يمنع هذا الصنف من
+    // الأخطاء بنيوياً بدل الاعتماد على تذكّر تحديث ثلاث نسخ متطابقة يدوياً.
+
+    private val db        = FirebaseFirestore.getInstance()
+    private val auth      = FirebaseAuth.getInstance()
+    private val storage   = FirebaseStorage.getInstance()
+    // ✅ جديد: نظام البريد الموحّد عبر Gmail — كل رسائل تأكيد البريد/استعادة
+    // كلمة المرور/حذف الحساب تمر الآن عبر دوال سحابية (بدل استدعاء Firebase
+    // Auth SDK مباشرة، التي ترسل بقالب Firebase الافتراضي بالرابط الخام).
+    private val functions = com.google.firebase.functions.FirebaseFunctions.getInstance()
+
+    private val uid get() = auth.currentUser?.uid
+
+    var lastProductsError: String? = null
+
+    // ✅ إصلاح أداء: كانت السلة والمفضلة تجلبان بيانات كل منتج عبر حلقة
+    // تنتظر كل مستند بشكل متسلسل (N طلب شبكة منفصل واحد تلو الآخر — 10
+    // عناصر = 10 رحلات شبكة كاملة بدل رحلة واحدة)، وهذا كان يجري في كل مرة
+    // تتغيّر فيها السلة (observeCart تعمل منذ إقلاع التطبيق مباشرة عبر
+    // Eagerly بـMainViewModel، وليس فقط عند فتح شاشة السلة فعلياً) — سبب
+    // مباشر لبطء عام محسوس عند فتح أي صفحة، وليس فقط صفحة السلة أو المفضلة.
+    // الحل: whereIn تجمع حتى 30 معرّفاً بطلب شبكة واحد، ومجموعات الـ30
+    // المتعددة (نادرة جداً عملياً) تُطلَق بالتوازي معاً بدل التسلسل.
+    private suspend fun fetchProductSnapsByIds(ids: List<String>): Map<String, DocumentSnapshot> {
+        if (ids.isEmpty()) return emptyMap()
+        return coroutineScope {
+            ids.distinct().chunked(30).map { chunk ->
+                async {
+                    db.collection("products")
+                        .whereIn(com.google.firebase.firestore.FieldPath.documentId(), chunk)
+                        .get().await().documents
+                }
+            }.awaitAll().flatten().associateBy { it.id }
+        }
+    }
+
+    // ✅ يفرّق رسالة "لا يوجد اتصال بالإنترنت" الواضحة عن أي فشل آخر (صلاحيات،
+    // خطأ سيرفر...) بدل عرض نص استثناء تقني خام للمستخدم دائماً — يُستخدم في
+    // كل مكان يحتاج ترجمة فشل شبكة إلى رسالة عربية مفهومة (راجع getProducts
+    // وAlgoliaSearchService لنفس المنطق على مسار البحث).
+    fun isConnectivityFailure(e: Throwable): Boolean {
+        if (e is UnknownHostException || e is SocketTimeoutException) return true
+        if (e is IOException) return true
+        val fe = e as? com.google.firebase.firestore.FirebaseFirestoreException
+        return fe?.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.UNAVAILABLE ||
+            fe?.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.DEADLINE_EXCEEDED
+    }
+
+    fun friendlyLoadError(e: Throwable): String =
+        if (isConnectivityFailure(e)) "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+        else "تعذّر تحميل المنتجات، حاول مرة أخرى"
+
+    // ✅ إصلاح (انهيار عند حفظ عنوان): نفس فكرة friendlyLoadError أعلاه، لكن
+    // بصياغة مناسبة لعمليات الحفظ/التعديل وليس التحميل فقط.
+    // ✅ إصلاح: أضيف تحقق IllegalStateException هنا خصيصاً لرسالة "انتهت
+    // جلستك" الجديدة بـaddAddress/updateAddress/deleteAddress — بدونه كانت
+    // ستُستبدَل تلقائياً بالرسالة العامة "تعذّر حفظ العنوان" مثل أي استثناء
+    // آخر غير مصنَّف، فيضيع السبب الحقيقي (انتهاء الجلسة) اللي يحتاجه
+    // المستخدم فعلاً ليعرف الحل (تسجيل الدخول من جديد).
+    fun friendlySaveError(e: Throwable): String = when {
+        isConnectivityFailure(e) -> "لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى"
+        e is IllegalStateException && !e.message.isNullOrBlank() -> e.message!!
+        else -> "تعذّر حفظ العنوان، حاول مرة أخرى"
+    }
+
+    // ✅ إصلاح (تفاعل وهمي بلا إنترنت — سلة/مفضلة/طلب تبدو ناجحة بلا نت):
+    // set()/update()/delete()/transaction على Firestore لا تفشل فوراً بلا
+    // اتصال؛ فبفضل الكاش الدائم (configureFirestoreCache) تُكتب محلياً وتبقى
+    // "معلّقة" بصمت بانتظار عودة الشبكة — لا رسالة خطأ، والمستمعون اللحظيون
+    // (observeCart/observeFavorites) يعكسون التغيير محلياً فوراً فيبدو وكأن
+    // العملية نجحت فعلياً. requireOnline() يفحص الاتصال الحقيقي (مُتحقَّق
+    // عبر NET_CAPABILITY_VALIDATED، لا مجرد "مسجَّل بشبكة") *قبل* أي محاولة
+    // كتابة حسّاسة، ويرفضها فوراً برسالة واضحة بدل تركها معلّقة حتى خطوة
+    // لاحقة (كرفع صورة الإيصال) تحتاج شبكة فعلية فتكشف الانقطاع متأخرة جداً.
+    private fun requireOnline() {
+        if (!com.eleven.store.util.isDeviceOnline(com.eleven.store.ElevenStoreApp.appContext)) {
+            throw IOException("لا يوجد اتصال بالإنترنت. تحقق من اتصالك وحاول مرة أخرى")
+        }
+    }
+
+    // ✅ (Audit الأمان/الموثوقية) بديل صريح عن `uid ?: return` الصامت: عند انتهاء
+    // الجلسة كانت عمليات السلة تنتهي بلا أي تنفيذ ثم تُبلَّغ للواجهة كنجاح
+    // ("تمت الإضافة") لأن الدالة تعود بلا استثناء. الآن ترمي رسالة واضحة.
+    private fun requireUid(): String =
+        uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
+
+    // ✅ (Audit) كتابة Firestore/Storage غير المعاملاتية قد تبقى "معلّقة" بلا نهاية إن
+    // انقطعت الشبكة بعد requireOnline() (Task لا يكتمل إلا بتأكيد السيرفر). مهلة
+    // صريحة تحوّل التعليق إلى خطأ واضح بدل دوّامة تحميل أبدية. لا نستخدمها لـplaceOrder
+    // عمداً: مهلة هناك قد تُظهر فشلاً بينما الطلب اكتمل فعلاً (تكرار طلب).
+    private suspend fun <T> withNetworkTimeout(millis: Long = 20_000L, block: suspend () -> T): T =
+        try {
+            kotlinx.coroutines.withTimeout(millis) { block() }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            throw IOException("انتهت مهلة الاتصال. تحقق من اتصالك وحاول مرة أخرى")
+        }
+
+    // ✅ جديد (Pagination/Infinite Scroll): قناة جانبية تحمل معلومات الصفحة
+    // التالية بعد كل استدعاء لـgetProducts — بنفس أسلوب lastProductsError
+    // أعلاه بدل تغيير توقيع الدالة (تفادياً لكسر الاستدعاءات الحالية
+    // بـMainViewModel.loadHomeData التي تجلب دفعة واحدة صغيرة وثابتة).
+    // lastProductsCursor: مؤشر Firestore (DocumentSnapshot) للصفحة التالية
+    // عند التصفح العادي بلا بحث. lastAlgoliaPage: رقم الصفحة التالية عند
+    // البحث عبر Algolia (النظامان مستقلان تماماً، أحدهما فقط يكون فعّالاً
+    // حسب وجود searchQuery من عدمه).
+    var lastProductsCursor: DocumentSnapshot? = null
+    var lastAlgoliaPage: Int = 0
+    var lastProductsHasMore: Boolean = false
+
+    // ─── Auth ───────────────────────────────────────────────────
+    val currentUser: FirebaseUser? get() = auth.currentUser
+
+    fun observeAuthState(): Flow<FirebaseUser?> = callbackFlow {
+        val listener = FirebaseAuth.AuthStateListener { trySend(it.currentUser) }
+        auth.addAuthStateListener(listener)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }
+
+    // ✅ إصلاح: التحقق من البريد أصبح إجبارياً — لا يُسمح بالدخول بحساب
+    // بريد/كلمة مرور غير مؤكَّد. لو غير مؤكَّد: نعيد إرسال رابط تأكيد جديد
+    // (تحسباً لضياع الرابط الأول أو انتهاء صلاحيته)، نسجّل الخروج فوراً حتى
+    // لا يبقى المستخدم داخل التطبيق بجلسة غير مؤكَّدة، ثم نرمي استثناءً
+    // مخصصاً تلتقطه الواجهة لعرض رسالة واضحة بدل "فشل تسجيل الدخول" العامة.
+    suspend fun loginWithEmail(email: String, password: String) {
+        val result = auth.signInWithEmailAndPassword(normalizeEmailForAuth(email), password).await()
+        val user = result.user
+        if (user != null && !user.isEmailVerified) {
+            try {
+                // ✅ إصلاح: كانت ترسل رابط تأكيد. الآن ترسل رمز تأكيد (OTP) عبر
+                // نفس القالب الموحّد — المستخدم يُدخله مباشرة داخل شاشة التحقق.
+                sendVerificationOtpViaFunction()
+            } catch (e: Exception) {
+                Log.w("FirestoreRepository", "تعذّر إعادة إرسال رمز التأكيد عند محاولة الدخول", e)
+            }
+            val unverifiedEmail = user.email ?: normalizeEmailForAuth(email)
+            auth.signOut()
+            throw EmailNotVerifiedException(unverifiedEmail)
+        }
+    }
+
+    // ✅ إصلاح ("تعذّر إرسال رابط التأكيد" عند التسجيل): نفس مشكلة
+    // "unauthenticated" اللي حصلت في حذف الحساب، لكن هنا بعد
+    // createUserWithEmailAndPassword مباشرة — جلسة المستخدم الجديد لسه
+    // "طرية" وقتها، فتوكن الهوية المخزَّن محلياً ممكن ميكونش جاهزاً بعد
+    // لحظة الاستدعاء، فتفشل الدالة السحابية محلياً بخطأ عام قبل ما تصل
+    // للسيرفر. تجديد التوكن إجبارياً هنا (مكان واحد يغطي كل نداءات هذه
+    // الدالة: التسجيل، إعادة الإرسال من الإعدادات، وإعادة الإرسال عند
+    // محاولة دخول بحساب غير مؤكَّد) يضمن دائماً توكن صالح وقت الاستدعاء.
+    // ✅ إصلاح: كانت تستدعي sendVerificationEmail (رابط). الآن تستدعي
+    // sendEmailVerificationOtp (رمز من 6 أرقام) — نفس منطق تجديد التوكن
+    // إجبارياً قبل النداء لضمان جلسة صالحة وقت الاستدعاء.
+    private suspend fun sendVerificationOtpViaFunction() {
+        auth.currentUser?.getIdToken(true)?.await()
+        functions.getHttpsCallable("sendEmailVerificationOtp").call().await()
+    }
+
+    // ✅ إصلاح: registerWithEmail كانت تُرجع FirebaseUser فقط، فنجاح/فشل إرسال
+    // رابط التأكيد (خطوة تالية بالأسفل) كان يُبلَع بصمت تماماً بدون أي أثر
+    // يوصل للواجهة — المستخدم يشوف شاشة "تحقق من بريدك" حتى لو الإرسال فشل
+    // فعلياً. الآن نُرجع النتيجتين معاً ليقدر الاستدعاء الأعلى (ViewModel)
+    // يعرض تنبيهاً صادقاً بدل افتراض النجاح دائماً.
+    // ✅ تشخيص (رسائل التأكيد لا تصل ولا يوجد أي أثر لها بسجلات Cloud
+    // Functions إطلاقاً): كان الخطأ الفعلي يُسجَّل فقط بـLog.w المحلي غير
+    // المتاح بدون كابل/Logcat، فلا طريقة لمعرفة هل فشل الاستدعاء محلياً
+    // (قبل وصوله لفايربيز أصلاً) أو بالسيرفر. verificationEmailError يحمل
+    // الآن وصف الاستثناء الفعلي (نوعه + كوده لو FirebaseFunctionsException
+    // + رسالته) ليظهر مباشرة بالشاشة نفسها.
+    data class RegisterOutcome(
+        val user: FirebaseUser,
+        val verificationEmailSent: Boolean,
+        val verificationEmailError: String? = null,
+    )
+
+    /** وصف مختصر وواضح لأي استثناء يحدث أثناء استدعاء دوال تأكيد البريد —
+     * يشمل كود FirebaseFunctionsException (مثل UNAUTHENTICATED/INTERNAL/
+     * NOT_FOUND) إن وُجد، لعرضه مباشرة بالواجهة بدل إخفائه بـLog.w فقط. */
+    private fun describeMailException(e: Exception): String {
+        val functionsEx = e as? com.google.firebase.functions.FirebaseFunctionsException
+        val className = e::class.java.simpleName
+        val msg = e.message?.takeIf { it.isNotBlank() } ?: "بدون رسالة تفصيلية"
+        return if (functionsEx != null) "$className(${functionsEx.code}): $msg" else "$className: $msg"
+    }
+
+    // ✅ التسجيل يطابق سلوك الموقع: ينشئ الحساب، يضبط الاسم في Firebase Auth،
+    // ثم يكتب وثيقة المستخدم في Firestore (نفس الحقول المستخدمة في الموقع)
+    suspend fun registerWithEmail(name: String, email: String, phone: String, password: String): RegisterOutcome {
+        val normalizedEmail = normalizeEmailForAuth(email)
+        val result = auth.createUserWithEmailAndPassword(normalizedEmail, password).await()
+        val user = result.user ?: throw IllegalStateException("تعذر إنشاء الحساب")
+
+        val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+            .setDisplayName(name)
+            .build()
+        user.updateProfile(profileUpdates).await()
+
+        db.collection("users").document(user.uid).set(
+            mapOf(
+                "id" to user.uid,
+                "name" to name,
+                "email" to normalizedEmail,
+                "phone" to phone,
+                "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+            )
+        ).await()
+
+        // ✅ إصلاح: لم يكن هناك أي تأكيد بريد إلكتروني إطلاقاً بالتطبيق —
+        // أي حساب بريد/كلمة مرور يدخل مباشرة بلا أي تحقق من ملكية البريد
+        // الفعلي. نرسل رمز تحقق (OTP) فور إنشاء الحساب (عبر الدالة السحابية
+        // — قالبنا الموحّد بدل قالب Firebase الافتراضي). فشل الإرسال (مثال:
+        // تجاوز حصة Gmail اليومية) لا يجب أن يمنع إنشاء الحساب نفسه — يبقى
+        // بإمكان المستخدم طلب إعادة الإرسال لاحقاً من الإعدادات.
+        // ✅ رسالة الترحيب لا تُستدعى هنا يدوياً: onUserCreated (Cloud Function
+        // على مستوى Firebase Auth نفسه) ترسلها تلقائياً لأي حساب جديد، بصرف
+        // النظر عن طريقة التسجيل (بريد أو Google) أو المنصة (موقع/أندرويد).
+        var verificationEmailError: String? = null
+        val verificationEmailSent = try {
+            sendVerificationOtpViaFunction()
+            true
+        } catch (e: Exception) {
+            val detail = describeMailException(e)
+            Log.w("FirestoreRepository", "تعذّر إرسال رمز تأكيد البريد الإلكتروني: $detail", e)
+            verificationEmailError = detail
+            false
+        }
+
+        // ✅ إصلاح: بما أن التحقق أصبح إجبارياً، لا يجب أن يبقى الحساب الجديد
+        // مسجّل دخول تلقائياً (سلوك Firebase الافتراضي بعد createUser) بينما
+        // بريده غير مؤكَّد بعد — نسجّل الخروج فوراً، والمستخدم يدخل لاحقاً
+        // بشكل طبيعي عبر شاشة تسجيل الدخول بمجرد تأكيد البريد.
+        auth.signOut()
+
+        return RegisterOutcome(user, verificationEmailSent, verificationEmailError)
+    }
+
+    /**
+     * إعادة إرسال رمز تأكيد البريد الإلكتروني للمستخدم الحالي (يُستخدم من
+     * شاشة الإعدادات لحسابات البريد/كلمة المرور غير المؤكَّدة، ومن شاشة
+     * إدخال الرمز نفسها عند الضغط على "إعادة الإرسال").
+     * ✅ تشخيص: عند الفشل، ترمي استثناءً برسالة تصف الخطأ الفعلي (نفس منطق
+     * describeMailException) بدل ترك الاستثناء الخام يمر كما هو، ليقدر
+     * المستدعي (ViewModel) يعرضه مباشرة بالواجهة.
+     */
+    suspend fun resendEmailVerification() {
+        auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
+        try {
+            sendVerificationOtpViaFunction()
+        } catch (e: Exception) {
+            val detail = describeMailException(e)
+            Log.w("FirestoreRepository", "تعذّر إعادة إرسال رمز التأكيد: $detail", e)
+            throw Exception(detail, e)
+        }
+    }
+
+    /**
+     * ✅ جديد: تأكيد البريد الإلكتروني بإدخال الرمز (OTP) بدل فتح رابط.
+     * بلا شرط تسجيل دخول عمداً — التسجيل يسجّل خروج المستخدم فوراً بعد
+     * إرسال الرمز (التحقق إجباري قبل أي دخول فعلي)، فشاشة إدخال الرمز
+     * تعمل دائماً بلا جلسة، والبريد+الرمز هما إثبات الملكية.
+     */
+    suspend fun confirmEmailVerificationOtp(email: String, otp: String) {
+        functions.getHttpsCallable("confirmEmailVerificationOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email), "otp" to otp)).await()
+    }
+
+    /**
+     * ✅ جديد: إعادة إرسال رمز تأكيد البريد بلا جلسة مسجَّلة (زر "إعادة
+     * الإرسال" بشاشة إدخال الرمز نفسها) — بخلاف resendEmailVerification
+     * بالأعلى (تتطلب جلسة، تُستخدم من شاشة الإعدادات فقط).
+     */
+    suspend fun resendEmailVerificationOtpByEmail(email: String) {
+        functions.getHttpsCallable("sendEmailVerificationOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email))).await()
+    }
+
+    // ✅ تسجيل الدخول/التسجيل عبر Google.
+    // إصلاحان مهمان مقارنة بالنسخة السابقة:
+    //  1) كانت تكتب كل مرة set(merge) بـphone="" وname وavatar وcreatedAt=الآن،
+    //     فتمسح رقم هاتف المستخدم واسمه المعدَّل وتاريخ إنشاء حسابه عند كل
+    //     دخول بجوجل. الآن: مستند جديد فقط يُنشأ كاملاً، والموجود لا يُلمس
+    //     إلا لملء حقل فارغ فعلاً.
+    //  2) كان أي فشل في كتابة مستند المستخدم (قواعد Firestore، شبكة...) يُسقط
+    //     العملية كلها بعبارة "فشل تسجيل الدخول" رغم أن Firebase Auth أكمل
+    //     الدخول فعلاً. الآن مزامنة الملف الشخصي "أفضل جهد": تُسجَّل بسجل
+    //     الأخطاء بلوحة التحكم ولا تمنع الدخول.
+    suspend fun signInWithGoogleIdToken(idToken: String): FirebaseUser {
+        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+        val result = auth.signInWithCredential(credential).await()
+        val user = result.user ?: throw IllegalStateException("فشل تسجيل الدخول عبر Google")
+
+        try {
+            syncGoogleProfile(user)
+        } catch (e: Exception) {
+            Log.w("FirestoreRepository", "تعذّرت مزامنة ملف مستخدم Google (الدخول نفسه نجح)", e)
+            com.eleven.store.util.CrashReporter.reportNonFatal(e, route = "googleSignIn:syncProfile")
+        }
+
+        return user
+    }
+
+    private suspend fun syncGoogleProfile(user: FirebaseUser) {
+        val ref = db.collection("users").document(user.uid)
+        val existing = ref.get().await()
+        val displayName = user.displayName.orEmpty()
+        val email = user.email.orEmpty()
+        val avatar = user.photoUrl?.toString().orEmpty()
+
+        if (!existing.exists()) {
+            ref.set(
+                mapOf(
+                    "id" to user.uid,
+                    "name" to displayName,
+                    "email" to email,
+                    "phone" to "",
+                    "avatar" to avatar,
+                    "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                )
+            ).await()
+            return
+        }
+
+        val patch = mutableMapOf<String, Any>()
+        if (existing.getString("id").isNullOrBlank()) patch["id"] = user.uid
+        if (existing.getString("name").isNullOrBlank() && displayName.isNotBlank()) patch["name"] = displayName
+        if (existing.getString("email").isNullOrBlank() && email.isNotBlank()) patch["email"] = email
+        if (existing.getString("avatar").isNullOrBlank() && avatar.isNotBlank()) patch["avatar"] = avatar
+        if (patch.isNotEmpty()) {
+            ref.set(patch, com.google.firebase.firestore.SetOptions.merge()).await()
+        }
+    }
+
+    // ✅ إصلاح: كانت تُرسل رابط إعادة تعيين (sendPasswordResetEmailCustom).
+    // الآن ترسل رمز تأكيد (OTP) يُدخَل مباشرة داخل التطبيق مع كلمة المرور
+    // الجديدة (confirmPasswordResetOtp بالأسفل)، بدل فتح رابط خارجي.
+    suspend fun requestPasswordResetOtp(email: String) {
+        functions.getHttpsCallable("sendPasswordResetOtp")
+            .call(mapOf("email" to normalizeEmailForAuth(email))).await()
+    }
+
+    /** الخطوة الثانية: يُرسِل الرمز + كلمة المرور الجديدة معاً للتحقق والتغيير دفعة واحدة. */
+    suspend fun confirmPasswordResetOtp(email: String, otp: String, newPassword: String) {
+        functions.getHttpsCallable("confirmPasswordResetOtp")
+            .call(
+                mapOf(
+                    "email" to normalizeEmailForAuth(email),
+                    "otp" to otp,
+                    "newPassword" to newPassword,
+                )
+            ).await()
+    }
+
+    // ✅ يراقب وثيقة users/{uid} مباشرةً — هذا هو مصدر رقم الهاتف الحقيقي
+    // (وليس user.phoneNumber من Firebase Auth، فهو مخصص لتسجيل الدخول عبر
+    // رقم الهاتف ويبقى فارغاً دائماً لحسابات البريد/كلمة المرور)
+    fun observeUserProfile(): Flow<UserProfile?> = callbackFlow {
+        val currentUid = uid
+        if (currentUid == null) {
+            trySend(null)
+            awaitClose { }
+        } else {
+            val registration = db.collection("users").document(currentUid)
+                .addSnapshotListener { snap, _ ->
+                    trySend(snap?.toObject(UserProfile::class.java))
+                }
+            awaitClose { registration.remove() }
+        }
+    }
+
+    // ✅ يحدّث الاسم في Firebase Auth (displayName) ورقم الهاتف + الاسم في
+    // وثيقة Firestore (users/{uid})، بنفس منطق التسجيل ومطابق لسلوك الموقع
+    suspend fun updateUserProfile(name: String, phone: String) {
+        requireOnline()
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل الدخول")
+
+        val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+            .setDisplayName(name)
+            .build()
+        user.updateProfile(profileUpdates).await()
+
+        db.collection("users").document(user.uid).set(
+            mapOf(
+                "id" to user.uid,
+                "name" to name,
+                "email" to (user.email ?: ""),
+                "phone" to phone,
+            ),
+            com.google.firebase.firestore.SetOptions.merge()
+        ).await()
+    }
+
+    suspend fun changePassword(currentPassword: String, newPassword: String) {
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
+        val email = user.email ?: throw IllegalStateException("لا يوجد بريد إلكتروني مرتبط بالحساب")
+        val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, currentPassword)
+        user.reauthenticate(credential).await()
+        user.updatePassword(newPassword).await()
+    }
+
+    // ✅ إصلاح (رمز تأكيد الحذف): حذف الحساب لم يعد خطوة واحدة. هذه الدالة
+    // الآن هي الخطوة 1 فقط — إعادة مصادقة بكلمة المرور (إثبات معرفة كلمة
+    // السر)، ثم طلب رمز تأكيد (OTP) من 6 أرقام يُرسَل لبريد الحساب. الحذف
+    // الفعلي لا يحدث هنا إطلاقاً — فقط داخل confirmAccountDeletion بعد إدخال
+    // الرمز الصحيح (انظر تعليقها أدناه لسبب نقل الحذف الفعلي للسيرفر).
+    suspend fun deleteAccount(currentPassword: String) {
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
+        val email = user.email ?: throw IllegalStateException("لا يوجد بريد إلكتروني مرتبط بالحساب")
+        val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, currentPassword)
+        user.reauthenticate(credential).await()
+        requestAccountDeletionOtp()
+    }
+
+    // ✅ إصلاح: deleteAccount(currentPassword) يفترض دائماً حساب بريد/كلمة
+    // مرور (EmailAuthProvider). حسابات Google (لا تملك كلمة مرور محلية) كانت
+    // تُستدعى بنفس المسار بكلمة مرور فارغة فتفشل إعادة المصادقة دائماً، ولا
+    // يمكن حذف الحساب فعلياً. هذا المسار المنفصل يعيد المصادقة بـcredential
+    // من Google (idToken حديث من GoogleSignInClient) قبل الحذف.
+    // ✅ نفس تعديل deleteAccount أعلاه بالضبط: الخطوة 1 فقط (إعادة مصادقة
+    // Google هنا بدل كلمة المرور)، ثم طلب رمز التأكيد.
+    suspend fun deleteAccountWithGoogle(idToken: String) {
+        val user = auth.currentUser ?: throw IllegalStateException("لا يوجد مستخدم مسجل")
+        val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+        user.reauthenticate(credential).await()
+        requestAccountDeletionOtp()
+    }
+
+    // ✅ إصلاح ("unauthenticated" عند حذف الحساب): الدالتان السحابيتان هنا
+    // تُستدعيان مباشرة بعد reauthenticate() بالأعلى. عميل Firebase Functions
+    // يُرفق توكن الهوية المخزَّن محلياً تلقائياً — لو لم يُجدَّد هذا التوكن
+    // بعد بأحدث حالة (خاصة بعد إعادة مصادقة للتو)، الاستدعاء يفشل محلياً
+    // بخطأ "UNAUTHENTICATED" عام قبل أن يصل للسيرفر أصلاً. إجبار تجديد
+    // التوكن هنا (getIdToken(true)) يضمن استخدام توكن صالح دائماً.
+    private suspend fun requestAccountDeletionOtp() {
+        requireOnline()
+        auth.currentUser?.getIdToken(true)?.await()
+        functions.getHttpsCallable("requestAccountDeletionOtp").call().await()
+    }
+
+    /**
+     * الخطوة 2 (الأخيرة) من حذف الحساب: يُستدعى بعد إدخال المستخدم لرمز
+     * الـ6 أرقام الذي وصله بالبريد. الحذف الفعلي (admin.auth().deleteUser)
+     * يحدث على السيرفر داخل الدالة السحابية confirmAccountDeletion — وليس
+     * هنا عبر user.delete() المباشرة كما كان سابقاً — لضمان أن حذف الحساب
+     * لا يمكن أن يتم إلا بعد إثبات امتلاك الوصول الفعلي لبريد الحساب، لا
+     * كلمة المرور وحدها. بعد نجاح الحذف، نسجّل الخروج محلياً فوراً لأن
+     * جلسة Firebase Auth الحالية على الجهاز أصبحت غير صالحة لحساب لم يعد
+     * موجوداً.
+     */
+    suspend fun confirmAccountDeletion(otp: String) {
+        requireOnline()
+        auth.currentUser?.getIdToken(true)?.await() // نفس إصلاح requestAccountDeletionOtp أعلاه
+        functions.getHttpsCallable("confirmAccountDeletion")
+            .call(mapOf("otp" to otp)).await()
+        auth.signOut()
+    }
+
+    /** هل المستخدم الحالي مسجَّل عبر Google (لا يملك كلمة مرور محلية)؟ */
+    fun isCurrentUserGoogleAccount(): Boolean =
+        auth.currentUser?.providerData?.any {
+            it.providerId == com.google.firebase.auth.GoogleAuthProvider.PROVIDER_ID
+        } ?: false
+
+    // ✅ إصلاح خصوصية: نحذف توكن FCM الخاص *بهذا الجهاز تحديداً* من fcmTokens
+    // قبل تسجيل الخروج فعلياً. بدون هذا، لو استُخدم نفس الجهاز لاحقاً من
+    // مستخدم آخر (جهاز مشترك)، يبقى توكن الحساب الأول مسجَّلاً وموجّهاً
+    // فعلياً لنفس الجهاز — فإشعارات حسّاسة (تفاصيل طلب) قد تصل للمستخدم
+    // الثاني الذي يستخدم الجهاز فعلياً الآن. نجلب التوكن ونحذفه بينما
+    // المستخدم لا يزال مسجّل دخول (auth.currentUser ما زال متوفراً)، ثم
+    // نسجّل الخروج. أي فشل بجلب/حذف التوكن (لا يوجد اتصال مثلاً) لا يجب أن
+    // يمنع تسجيل الخروج نفسه أبداً.
+    suspend fun logout() {
+        try {
+            val u = uid
+            if (u != null) {
+                val token = com.google.firebase.messaging.FirebaseMessaging.getInstance().token.await()
+                if (!token.isNullOrBlank()) {
+                    db.collection("users").document(u)
+                        .set(
+                            mapOf("fcmTokens" to com.google.firebase.firestore.FieldValue.arrayRemove(token)),
+                            com.google.firebase.firestore.SetOptions.merge()
+                        )
+                        .await()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("FirestoreRepository", "تعذّر حذف توكن FCM عند تسجيل الخروج (لن يمنع تسجيل الخروج)", e)
+        }
+        auth.signOut()
+    }
+
+    // ─── Helper: أي نوع رقمي → Double بأمان ────────────────────
+    // Firestore يخزّن الأرقام أحياناً كـ Long وأحياناً كـ Double حسب مصدر البيانات.
+    // هذه الدالة تتعامل مع كلا النوعين بأمان تام.
+    private fun DocumentSnapshot.getDouble2(field: String): Double =
+        when (val v = get(field)) {
+            is Double -> v
+            is Long   -> v.toDouble()
+            is Int    -> v.toDouble()
+            is Float  -> v.toDouble()
+            is Number -> v.toDouble()
+            else      -> 0.0
+        }
+
+    private fun DocumentSnapshot.getLong2(field: String): Long =
+        when (val v = get(field)) {
+            is Long   -> v
+            is Double -> v.toLong()
+            is Int    -> v.toLong()
+            is Number -> v.toLong()
+            else      -> 0L
+        }
+
+    // ─── Helper: تحويل document → Order بدون toObject() ────────
+    // القراءة اليدوية تتجنب أي تعارض بين Long/Double/Int في Firestore
+    @Suppress("UNCHECKED_CAST")
+    private fun DocumentSnapshot.toOrder(): Order? {
+        return try {
+            val itemsList = (get("items") as? List<Map<String, Any>>) ?: emptyList()
+            val items = itemsList.mapNotNull { map ->
+                try {
+                    CartItem(
+                        id        = map["id"]?.toString() ?: map["productId"]?.toString() ?: "",
+                        productId = map["productId"]?.toString() ?: "",
+                        name      = map["name"]?.toString() ?: "",
+                        price     = when (val p = map["price"]) {
+                            is Double -> p
+                            is Long   -> p.toDouble()
+                            is Number -> p.toDouble()
+                            else      -> 0.0
+                        },
+                        quantity  = when (val q = map["quantity"]) {
+                            is Long   -> q.toInt()
+                            is Int    -> q
+                            is Number -> q.toInt()
+                            else      -> 1
+                        },
+                        image     = map["image"]?.toString() ?: "",
+                    )
+                } catch (e: Exception) { null }
+            }
+
+            val addrMap = get("shippingAddress") as? Map<String, Any>
+            val address = addrMap?.let { m ->
+                val createdAtMap = m["createdAt"] as? Map<String, Any>
+                Address(
+                    id        = m["id"]?.toString() ?: "",
+                    fullName  = m["fullName"]?.toString() ?: "",
+                    name      = m["name"]?.toString() ?: "",
+                    phone     = m["phone"]?.toString() ?: "",
+                    city      = m["city"]?.toString() ?: "",
+                    address   = m["address"]?.toString() ?: "",
+                    isDefault = m["isDefault"] as? Boolean ?: false,
+                    latitude  = (m["latitude"] as? Number)?.toDouble() ?: 0.0,
+                    longitude = (m["longitude"] as? Number)?.toDouble() ?: 0.0,
+                )
+            }
+
+            Order(
+                id                = id,
+                orderNumber       = getString("orderNumber") ?: "",
+                userId            = getString("userId") ?: "",
+                items             = items,
+                total             = getDouble2("total"),
+                subtotal          = getDouble2("subtotal"),
+                shippingCost      = getDouble2("shippingCost"),
+                discount          = getDouble2("discount"),
+                couponCode        = getString("couponCode"),
+                status            = OrderStatus.from(getString("status") ?: "under_review"),
+                shippingAddress   = address,
+                paymentMethod     = getString("paymentMethod") ?: "",
+                paymentReceipt    = getString("paymentReceipt") ?: "",
+                verificationToken = getString("verificationToken") ?: "",
+                notes             = getString("notes") ?: "",
+                createdAt         = getTimestamp("createdAt"),
+            )
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "toOrder() failed for doc $id: ${e.message}", e)
+            null
+        }
+    }
+
+    // ─── Store Settings ─────────────────────────────────────────
+    suspend fun getStoreSettings(): StoreSettings {
+        return try {
+            val doc = db.collection("settings").document("store").get().await()
+            doc.toObject(StoreSettings::class.java) ?: StoreSettings()
+        } catch (e: Exception) { StoreSettings() }
+    }
+
+    // ─── Banners ────────────────────────────────────────────────
+    // ✅ إصلاح: كان الفشل النهائي (بعد تجربة fallback) يُبلَع بصمت (emptyList)
+    // فيظهر البانر فارغاً دائماً بلا أي تمييز بين "لا توجد بانرات فعلاً" و"فشل
+    // تحميل حقيقي (شبكة/سيرفر)" — نفس إصلاح getFavoriteProducts أعلاه، يُرفَع
+    // الاستثناء الآن للمستدعي (loadBanners بـMainViewModel) ليعرض خطأ قابل
+    // لإعادة المحاولة بدل قسم بانر مختفٍ للأبد بصمت.
+    suspend fun getBanners(): List<Banner> {
+        return try {
+            db.collection("banners")
+                .whereEqualTo("isActive", true)
+                .orderBy("order", Query.Direction.ASCENDING)
+                .get().await()
+                .documents.mapNotNull { doc ->
+                    doc.toObject(Banner::class.java)?.copy(id = doc.id)
+                }
+        } catch (e: Exception) {
+            try {
+                db.collection("banners")
+                    .orderBy("order", Query.Direction.ASCENDING)
+                    .get().await()
+                    .documents.mapNotNull { doc ->
+                        doc.toObject(Banner::class.java)?.copy(id = doc.id)
+                    }.filter { it.isActive }
+            } catch (e2: Exception) {
+                Log.e("FirestoreRepo", "getBanners failed: ${e2.message}", e2)
+                throw e2
+            }
+        }
+    }
+
+
+    // ─── Categories ─────────────────────────────────────────────
+    // مطابق تماماً لاستعلام getCategories في firestore-router.ts بالموقع:
+    // فلترة isActive فقط بدون أي ترتيب إضافي (لا يوجد orderBy بالموقع)
+    // ✅ إصلاح: نفس نمط getFavoriteProducts/getBanners — الفشل كان يُبلَع
+    // (emptyList) فيبدو للمستخدم وكأن "لا توجد تصنيفات" حتى أثناء انقطاع
+    // الاتصال الفعلي. الآن يُرفَع الاستثناء ليتعامل معه loadCategoriesAndBrands.
+    suspend fun getCategories(): List<Category> {
+        return try {
+            db.collection("categories")
+                .whereEqualTo("isActive", true)
+                .get().await()
+                .documents.mapNotNull { doc ->
+                    doc.toObject(Category::class.java)?.copy(id = doc.id)
+                }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getCategories failed: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // ─── Brands ─────────────────────────────────────────────────
+    suspend fun getBrands(): List<Brand> {
+        return try {
+            db.collection("brands")
+                .get().await()
+                .documents.mapNotNull { doc ->
+                    doc.toObject(Brand::class.java)?.copy(id = doc.id)
+                }.filter { it.isActive }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getBrands failed: ${e.message}", e)
+            throw e
+        }
+    }
+
+
+    // ─── Products ───────────────────────────────────────────────
+    suspend fun getProducts(
+        categoryId:   String?  = null,
+        isFeatured:   Boolean? = null,
+        isNew:        Boolean? = null,
+        isBestSeller: Boolean? = null,
+        onSale:       Boolean? = null,
+        brandId:      String?  = null,
+        searchQuery:  String?  = null,
+        // ✅ Pagination: مؤشر Firestore لصفحة التصفح التالية (يُتجاهل عند
+        // وجود بحث نصي — يُستخدم عندها algoliaPage بدلاً منه).
+        startAfter:   DocumentSnapshot? = null,
+        // ✅ Pagination: رقم صفحة Algolia التالية (مفهرس من 0، يُستخدم فقط
+        // عند وجود بحث نصي).
+        algoliaPage:  Int      = 0,
+        // ✅ إصلاح: كان 100 وبلا أي pagination — دفعة واحدة كبيرة ثابتة.
+        // الآن حجم صفحة حقيقي (30) يُستكمل عبر startAfter/algoliaPage بدل
+        // تحميل كل المنتجات دفعة واحدة عند فتح الشاشة (راجع lastProductsCursor
+        // /lastAlgoliaPage/lastProductsHasMore لمعرفة إن كانت هناك صفحة تالية).
+        limit:        Long     = 30,
+    ): List<Product> {
+        lastProductsError = null
+        lastProductsCursor = null
+        lastProductsHasMore = false
+
+        // ✅ Algolia فقط للبحث النصي — بلا أي fallback لفلترة Firestore محلية
+        // بعد الآن (كان هنا سابقاً: عند فراغ/فشل Algolia يُعاد جلب حتى 100
+        // منتج من Firestore وفلترتهم محلياً بـcontains()، وهو بالضبط ما يجب
+        // منعه: البحث يجب أن يمرّ عبر Algolia فقط، لا محلياً على الجهاز).
+        if (!searchQuery.isNullOrBlank()) {
+            if (!AlgoliaSearchService.isConfigured) {
+                // بلا مفاتيح Algolia مضبوطة، البحث غير متاح فعلياً — رسالة
+                // واضحة للمستخدم بدل نتائج فلترة محلية غير دقيقة.
+                lastProductsError = "خدمة البحث غير مهيّأة حالياً"
+                return emptyList()
+            }
+            val page = AlgoliaSearchService.searchProducts(
+                query = searchQuery.trim(),
+                categoryId = categoryId,
+                brandId = brandId,
+                onSale = onSale,
+                isFeatured = isFeatured,
+                isBestSeller = isBestSeller,
+                isNew = isNew,
+                hitsPerPage = limit.toInt(),
+                page = algoliaPage,
+            )
+            lastAlgoliaPage = algoliaPage + 1
+            lastProductsHasMore = page.hasMore
+            // ✅ إصلاح: AlgoliaSearchService كانت تبتلع كل استثناء (بلا اتصال،
+            // مهلة، خطأ سيرفر) وتُرجع قائمة فارغة بصمت تام، فتظهر واجهة البحث
+            // نفس شاشة "لم نجد أي منتجات" حتى عندما يكون السبب الحقيقي انقطاع
+            // الاتصال تماماً — رسالة مضلِّلة تدفع المستخدم لتغيير كلمة البحث
+            // بدل التحقق من اتصاله. الآن SearchPage تحمل سبب الفشل الفعلي (إن
+            // وُجد) لنعرضه بدل نص "لا نتائج" حين تكون النتيجة فارغة بسبب فشل
+            // فعلي لا بسبب بحث لم يُطابق شيئاً.
+            lastProductsError = page.error
+            // ✅ إصلاح: كان يُعتمَد كلياً على أن فهرسة Algolia تستبعد المنتجات
+            // غير المتاحة (isActive=false، نفاد المخزون، أو حذف نهائي) — لكن
+            // مزامنة الفهرس (syncProductToIndex بالسيرفر) قد تتأخر أو تفشل،
+            // فيبقى منتج محذوف أو نافد المخزون ظاهراً في نتائج البحث رغم زوال
+            // سبب ظهوره. الآن نتحقق من كل نتيجة مقابل Firestore (مصدر الحقيقة)
+            // قبل عرضها للمستخدم، عبر نفس دفعة whereIn المستخدمة أصلاً للسلة
+            // والمفضلة (fetchProductSnapsByIds) بدل استعلام منفصل لكل منتج.
+            if (page.products.isEmpty()) return page.products
+            return try {
+                val liveSnaps = fetchProductSnapsByIds(page.products.map { it.id })
+                page.products.filter { p ->
+                    val snap = liveSnaps[p.id] ?: return@filter false // محذوف نهائياً من قاعدة البيانات
+                    val isActive = snap.getBoolean("isActive") ?: true
+                    val stock = snap.getLong("stock") ?: 0L
+                    isActive && stock > 0
+                }
+            } catch (e: Exception) {
+                // فشل التحقق نفسه (شبكة، مهلة...) لا يجب أن يُسقط نتائج بحث
+                // صحيحة أصلاً — نعرضها كما هي بدل تحويل فشل شبكي بسيط في خطوة
+                // تحقق إضافية إلى فشل بحث كامل غير مبرَّر للمستخدم.
+                page.products
+            }
+        }
+
+        return try {
+            var query: Query = db.collection("products")
+            query = query.whereEqualTo("isActive", true)
+            categoryId?.let   { query = query.whereEqualTo("categoryId",   it) }
+            isFeatured?.let   { query = query.whereEqualTo("isFeatured",   it) }
+            // ✅ إصلاح جذري: isNew لم يكن يُكتب كحقل Boolean في أي مستند إطلاقاً
+            // (نفس الحقل المفقود على الموقع) — هذا الفلتر كان يعيد قائمة فارغة
+            // دائماً. الموقع أصلح هذا باستخدام نافذة تاريخية (آخر 30 يوماً) بدل
+            // حقل Boolean وهمي؛ نطابق هنا نفس المنطق تماماً بدل حقل isNew.
+            if (isNew == true) {
+                val newSince = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, -30) }.time
+                query = query.whereGreaterThanOrEqualTo("createdAt", newSince)
+            }
+            isBestSeller?.let { query = query.whereEqualTo("isBestSeller", it) }
+            onSale?.let       { query = query.whereEqualTo("isOnSale",     it) }
+            brandId?.let      { query = query.whereEqualTo("brandId",      it) }
+            // ✅ إصلاح: لم يكن هناك أي ترتيب — النتائج كانت تعود بترتيب مستند
+            // عشوائي فعلياً بدل الأحدث أولاً (نفس عائلة مشكلة الفهارس المذكورة
+            // بتعليقات السيرفر). يطابق الآن ترتيب الموقع (createdAt DESC).
+            query = query.orderBy("createdAt", Query.Direction.DESCENDING)
+            if (startAfter != null) {
+                query = query.startAfter(startAfter)
+            }
+            // +1 لمعرفة بدقة إن كانت هناك صفحة تالية فعلياً (نفس نمط
+            // getAllOrdersAdmin بالسيرفر) بدل تخمين عبر مقارنة الحجم بـlimit.
+            query = query.limit(limit + 1)
+
+            val docs = query.get().await().documents
+            lastProductsHasMore = docs.size.toLong() > limit
+            val pageDocs = if (lastProductsHasMore) docs.dropLast(1) else docs
+            lastProductsCursor = pageDocs.lastOrNull()
+
+            pageDocs.mapNotNull { doc ->
+                doc.toObject(Product::class.java)?.copy(id = doc.id)
+            }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getProducts failed: ${e.message}", e)
+            // ✅ إصلاح: كانت تُعرض للمستخدم كنص استثناء تقني خام (مثال:
+            // "FirebaseFirestoreException: UNAVAILABLE")، والذي كان دائماً
+            // يُعامَل في الواجهة كـ"فشل تحميل" عام أياً كان السبب — لم يكن
+            // يوضّح تحديداً أن السبب انقطاع الاتصال تحديداً حين يكون كذلك.
+            lastProductsError = friendlyLoadError(e)
+            emptyList()
+        }
+    }
+
+    suspend fun getProduct(id: String): Product? {
+        return try {
+            val doc = db.collection("products").document(id).get().await()
+            doc.toObject(Product::class.java)?.copy(id = doc.id)
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getProduct($id) failed: ${e.message}", e)
+            null
+        }
+    }
+
+    // ─── Cart ───────────────────────────────────────────────────
+    // ✅ مطابق تماماً لـ getCart بالموقع: يجلب أحدث مخزون لكل منتج في السلة، ويحذف تلقائياً
+    // أي عنصر أصبح منتجه غير نشط أو نفدت كميته بالكامل
+    // ✅ إصلاح: onError يُبلَّغ للمستدعي (نفس نمط observeNotifications) — بدونه
+    // كان أي خطأ (صلاحيات، فهرس مفقود، انقطاع اتصال لحظي) يُعامَل كـ"سلة فارغة"
+    // بصمت، فيختفي زر "إتمام الشراء" رغم أن السلة تحتوي عناصر فعلياً.
+    fun observeCart(onError: (Throwable) -> Unit = {}): Flow<List<CartItem>> = callbackFlow {
+        val u = uid ?: run { trySend(emptyList()); awaitClose {}; return@callbackFlow }
+        val cartCollection = db.collection("users").document(u).collection("cart")
+        val listener = cartCollection.addSnapshotListener { snap, error ->
+            if (error != null) {
+                Log.e("FirestoreRepo", "observeCart failed: ${error.message}", error)
+                onError(error)
+                return@addSnapshotListener
+            }
+            val rawItems = snap?.documents?.mapNotNull { doc ->
+                doc.toObject(CartItem::class.java)?.copy(id = doc.id)
+            } ?: emptyList()
+
+            if (rawItems.isEmpty()) {
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
+
+            launch {
+                // ✅ إصلاح أداء جذري: كانت هذه الحلقة تجلب مستند كل منتج بالسلة
+                // بطلب شبكة منفصل ومتسلسل (await() واحدة تلو الأخرى) — لسلة من
+                // 6 عناصر مثلاً، تعني 6 رحلات ذهاب/إياب كاملة قبل ظهور السلة،
+                // وتتكرر مع كل تغيير طفيف بالسلة. وبما أن observeCart تُشغَّل
+                // Eagerly منذ إقلاع التطبيق (وليس فقط عند فتح شاشة السلة)، كان
+                // هذا يزاحم بقية طلبات الشبكة (الرئيسية والمنتجات) في كل مرة
+                // يُفتح التطبيق. الآن: طلب واحد (أو القليل عند تعدد الدفعات)
+                // عبر whereIn يجلب كل المنتجات دفعة واحدة بالتوازي.
+                val snapsById = try {
+                    fetchProductSnapsByIds(rawItems.map { it.productId })
+                } catch (e: Exception) {
+                    null
+                }
+                val enriched = mutableListOf<CartItem>()
+                val batch = db.batch()
+                var needsCommit = false
+                for (item in rawItems) {
+                    val productSnap = snapsById?.get(item.productId)
+                    if (snapsById == null) {
+                        // فشل الجلب الدفعي بالكامل (مثال: بلا اتصال) — نُبقي عناصر
+                        // السلة كما هي بدل حذفها خطأً على أنها "غير موجودة".
+                        enriched.add(item)
+                        continue
+                    }
+                    val isActive = productSnap?.getBoolean("isActive") != false
+                    val stock = productSnap?.getLong2("stock") ?: 0L
+                    if (productSnap == null || !productSnap.exists() || !isActive || stock <= 0) {
+                        // المنتج لم يعد موجوداً/نشطاً أو نفدت كميته بالكامل: نحذفه تلقائياً من السلة
+                        batch.delete(cartCollection.document(item.id))
+                        needsCommit = true
+                        continue
+                    }
+                    val cappedQty = minOf(item.quantity.toLong(), stock).toInt()
+                    if (cappedQty != item.quantity) {
+                        batch.update(cartCollection.document(item.id), "quantity", cappedQty)
+                        needsCommit = true
+                    }
+                    enriched.add(item.copy(quantity = cappedQty, stock = stock))
+                }
+                if (needsCommit) {
+                    try { batch.commit().await() } catch (e: Exception) { /* ignore */ }
+                }
+                trySend(enriched)
+            }
+        }
+        awaitClose { listener.remove() }
+    }
+
+    // ✅ يتحقق من المخزون ولا يسمح بتجاوزه عند الإضافة للسلة (مطابق لمنطق السيرفر في الموقع)
+    suspend fun addToCart(item: CartItem) {
+        requireOnline()
+        val u = requireUid()
+        if (item.quantity <= 0) throw IllegalStateException("الكمية غير صالحة")
+        val cartRef = db.collection("users").document(u).collection("cart").document(item.productId)
+        val productRef = db.collection("products").document(item.productId)
+
+        withNetworkTimeout { db.runTransaction<Void?> { tx ->
+            val productSnap = tx.get(productRef)
+            if (!productSnap.exists() || productSnap.getBoolean("isActive") == false) {
+                throw IllegalStateException("هذا المنتج لم يعد متوفراً")
+            }
+            val stock = productSnap.getLong("stock") ?: 0L
+            if (stock <= 0) {
+                throw IllegalStateException("الكمية المطلوبة غير متوفرة في المخزون")
+            }
+
+            val cartSnap = tx.get(cartRef)
+            val currentQty = if (cartSnap.exists()) (cartSnap.getLong("quantity") ?: 0L) else 0L
+            val requestedQty = currentQty + item.quantity
+
+            if (requestedQty > stock) {
+                throw IllegalStateException("الكمية المطلوبة غير متوفرة في المخزون")
+            }
+
+            if (cartSnap.exists()) {
+                tx.update(cartRef, "quantity", requestedQty)
+            } else {
+                tx.set(cartRef, item.copy(id = item.productId, quantity = requestedQty.toInt()))
+            }
+            null
+        }.await() }
+    }
+
+    suspend fun removeFromCart(productId: String) {
+        requireOnline()
+        val u = requireUid()
+        withNetworkTimeout {
+            db.collection("users").document(u).collection("cart").document(productId).delete().await()
+        }
+    }
+
+    // ✅ تعديل الكمية من السلة فقط، مقيّداً بالكمية المتوفرة في المخزون
+    // يعيد true إذا تم تقييد الكمية بحد المخزون (capped) — مطابق لاستجابة updateCartQuantity في الموقع
+    suspend fun updateQuantity(productId: String, newQty: Int): Boolean {
+        requireOnline()
+        val u = requireUid()
+        val productSnap = db.collection("products").document(productId).get().await()
+        val stock = productSnap.getLong("stock") ?: 0L
+        if (stock <= 0) {
+            db.collection("users").document(u).collection("cart").document(productId).delete().await()
+            throw IllegalStateException("الكمية المطلوبة غير متوفرة في المخزون")
+        }
+        val capped = newQty.toLong() > stock
+        val finalQty = minOf(newQty.toLong(), stock)
+        withNetworkTimeout {
+            db.collection("users").document(u).collection("cart")
+                .document(productId)
+                .update("quantity", finalQty).await()
+        }
+        return capped
+    }
+
+    suspend fun clearCart() {
+        requireOnline()
+        val u = requireUid()
+        withNetworkTimeout {
+            val batch = db.batch()
+            val items = db.collection("users").document(u).collection("cart").get().await()
+            items.documents.forEach { batch.delete(it.reference) }
+            batch.commit().await()
+        }
+    }
+
+    // ─── Favorites ──────────────────────────────────────────────
+    // ✅ إصلاح: نفس نمط observeNotifications/observeCart — خطأ لحظي (اتصال
+    // متقطّع مثلاً) لم يعد يُعامَل كـ"لا توجد مفضّلة"، بل يُبلَّغ للمستدعي.
+    fun observeFavorites(onError: (Throwable) -> Unit = {}): Flow<List<String>> = callbackFlow {
+        val u = uid ?: run { trySend(emptyList()); awaitClose {}; return@callbackFlow }
+        val listener = db.collection("users").document(u).collection("favorites")
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    Log.e("FirestoreRepo", "observeFavorites failed: ${error.message}", error)
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                trySend(snap?.documents?.map { it.id } ?: emptyList())
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // ✅ إصلاح: كانت FavoritesScreen تشتق قائمة منتجات المفضلة عبر تصفية
+    // viewModel.allProducts (حالة مشتركة تُملؤها شاشة المنتجات بآخر فلتر/بحث
+    // استخدمه المستخدم هناك، ومحدودة بـ100 نتيجة، وتستبعد المنتجات نافدة
+    // المخزون). النتيجة: شاشة المفضلة تظهر فارغة أو ناقصة إن لم تتم زيارة
+    // شاشة المنتجات أصلاً، أو إن كان آخر فلتر مستخدم هناك لا يشمل كل
+    // المنتجات المفضَّلة (فئة معيّنة، بحث نصي، فلتر "عروض"...)، أو إن كان
+    // أحد عناصر المفضلة نافد المخزون. الموقع (getFavorites بـfirestore-
+    // router.ts) يجلب بيانات كل منتج مفضَّل مباشرة من مستنده الخاص بدل
+    // الاعتماد على أي قائمة/فلتر آخر — هذه الدالة تطابق نفس المنطق تماماً
+    // (تُبقي عناصر المخزون=0 ظاهرة كالموقع، وتحذف تلقائياً أي مفضّلة لمنتج
+    // لم يعد موجوداً أو أصبح غير نشط).
+    suspend fun getFavoriteProducts(): List<Product> {
+        val u = uid ?: return emptyList()
+        val favRef = db.collection("users").document(u).collection("favorites")
+        return try {
+            val favDocs = favRef.get().await().documents
+            if (favDocs.isEmpty()) return emptyList()
+
+            val productIds = favDocs.map { it.getString("productId") ?: it.id }
+            // ✅ إصلاح أداء: نفس مشكلة observeCart أعلاه بالضبط — كان يجلب
+            // مستند كل منتج مفضَّل بطلب منفصل ومتسلسل. الآن جلب دفعي بالتوازي.
+            val snapsById = fetchProductSnapsByIds(productIds)
+
+            val batch = db.batch()
+            var needsCommit = false
+            val result = mutableListOf<Product>()
+
+            favDocs.forEach { favDoc ->
+                val productId = favDoc.getString("productId") ?: favDoc.id
+                val snap = snapsById[productId]
+                val product = if (snap != null && snap.exists()) snap.toObject(Product::class.java)?.copy(id = snap.id) else null
+                if (product == null || snap?.getBoolean("isActive") == false) {
+                    // المنتج لم يعد موجوداً أو أصبح غير نشط: نحذفه تلقائياً من المفضلة
+                    // (مطابق تماماً لنفس التنظيف التلقائي في getFavorites بالموقع)
+                    batch.delete(favRef.document(favDoc.id))
+                    needsCommit = true
+                } else {
+                    result.add(product)
+                }
+            }
+            if (needsCommit) {
+                try { batch.commit().await() } catch (_: Exception) { /* تنظيف ثانوي، تجاهل الفشل */ }
+            }
+            result
+        } catch (e: Exception) {
+            // ✅ إصلاح: كانت تُرجع emptyList() هنا فتُعامَل كـ"لا توجد مفضلة"
+            // بصمت — بينما FavoritesScreen تعتمد على هذه الدالة تحديداً (وليس
+            // observeFavorites) لعرض قائمة المنتجات الفعلية. رفع الاستثناء
+            // للمستدعي يسمح له بالتفريق بين "فارغة فعلاً" و"فشل التحميل".
+            Log.e("FirestoreRepo", "getFavoriteProducts failed: ${e.message}", e)
+            throw e
+        }
+    }
+
+    suspend fun toggleFavorite(productId: String): Boolean {
+        requireOnline()
+        val u = requireUid()
+        val ref = db.collection("users").document(u).collection("favorites").document(productId)
+        val doc = ref.get().await()
+        return if (doc.exists()) {
+            ref.delete().await(); false
+        } else {
+            ref.set(mapOf(
+                "productId" to productId,
+                "addedAt" to com.google.firebase.Timestamp.now()
+            )).await(); true
+        }
+    }
+
+    // ─── Addresses ──────────────────────────────────────────────
+    // ✅ إصلاح: نفس النمط أعلاه — كان الفشل يُبلَع (emptyList) فيظهر للمستخدم
+    // "لا توجد عناوين محفوظة" حتى لو كان السبب فعلياً انقطاع اتصال، فيضطر
+    // لإعادة إدخال عنوانه بالكامل ظناً أنه لم يُحفَظ من الأساس.
+    suspend fun getAddresses(): List<Address> {
+        val u = uid ?: return emptyList()
+        return try {
+            db.collection("users").document(u).collection("addresses")
+                .get().await()
+                .documents.mapNotNull { it.toObject(Address::class.java)?.copy(id = it.id) }
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getAddresses failed: ${e.message}", e)
+            throw e
+        }
+    }
+
+    // ─── Contact — رسائل "اتصل بنا" ────────────────────────────
+    // ✅ إصلاح حرج: زر "إرسال الرسالة" بشاشة اتصل بنا كان يعرض رسالة نجاح
+    // فورية بلا أي استدعاء فعلي — الرسالة كانت تُمسح من الشاشة ولا تُخزَّن
+    // أو تُرسَل لأي مكان إطلاقاً (لا يوجد أي endpoint لها لا بالتطبيق ولا
+    // بالسيرفر أصلاً). الآن تُكتب فعلياً في مجموعة "contactMessages"
+    // (متاحة بالقراءة فقط من لوحة التحكم عبر Admin SDK — راجع firestore.rules)
+    // مع createdAt وuid المرسل (إن كان مسجّل دخول) لتتبعها لاحقاً.
+    suspend fun sendContactMessage(name: String, email: String, subject: String, message: String) {
+        requireOnline()
+        // ✅ عبر Cloud Function `submitContactMessage` (حد لكل IP ولكل مرسِل قبل الكتابة) — القواعد
+        // لم تعد تسمح بالكتابة المباشرة على contactMessages (كانت مفتوحة للجميع بلا حد معدل).
+        try {
+            functions.getHttpsCallable("submitContactMessage")
+                .call(
+                    mapOf(
+                        "name" to name.trim(),
+                        "email" to email.trim(),
+                        "subject" to subject.trim(),
+                        "message" to message.trim(),
+                    )
+                ).await()
+        } catch (e: com.google.firebase.functions.FirebaseFunctionsException) {
+            throw IllegalStateException(friendlyCallableError(e, "تعذّر إرسال رسالتك، حاول مرة أخرى"), e)
+        }
+    }
+
+    // ✅ إصلاح: تفعيل "افتراضي" على عنوان لم يكن يُلغي الصفة عن باقي عناوين
+    // المستخدم، فيمكن أن ينتهي به الأمر بأكثر من عنوان "افتراضي" بنفس الوقت
+    // — والدفع يختار أول واحد يعثر عليه بترتيب Firestore، وليس بالضرورة آخر
+    // ما فعّله المستخدم فعلياً. الآن، أي حفظ بـisDefault=true يُلغي الصفة عن
+    // كل عناوين المستخدم الأخرى ضمن نفس batch الذرّية.
+    private suspend fun unsetOtherDefaults(userId: String, exceptAddressId: String?) {
+        val others = db.collection("users").document(userId).collection("addresses")
+            .whereEqualTo("isDefault", true)
+            .get().await()
+        val toClear = others.documents.filter { it.id != exceptAddressId }
+        if (toClear.isEmpty()) return
+        val batch = db.batch()
+        toClear.forEach { batch.update(it.reference, "isDefault", false) }
+        batch.commit().await()
+    }
+
+    // ✅ إصلاح: `uid ?: return ""` سابقاً كان يتجاهل الحفظ بصمت تام لو انتهت
+    // صلاحية جلسة المستخدم أو انقطعت (uid == null) — الدالة ترجع بلا أي
+    // استثناء، فـMainViewModel.addAddress/updateAddress يعتبرها نجحت فعلاً
+    // (onDone() يُستدعى، النموذج يُغلق) بينما لا شيء كُتب بـFirestore إطلاقاً؛
+    // أخطر من ظهور رسالة خطأ — فقدان بيانات صامت يبدو للمستخدم كنجاح. الآن
+    // تُرمى استثناء واضح ليصل عبر friendlySaveError كرسالة حقيقية للمستخدم.
+    suspend fun addAddress(address: Address): String {
+        requireOnline()
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
+        val ref = db.collection("users").document(u).collection("addresses").document()
+        ref.set(address).await()
+        if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = ref.id)
+        return ref.id
+    }
+
+    suspend fun updateAddress(addressId: String, address: Address) {
+        requireOnline()
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
+        db.collection("users").document(u).collection("addresses").document(addressId).set(address).await()
+        if (address.isDefault) unsetOtherDefaults(u, exceptAddressId = addressId)
+    }
+
+    suspend fun deleteAddress(addressId: String) {
+        requireOnline()
+        val u = uid ?: throw IllegalStateException("انتهت جلستك، سجّل الدخول من جديد وحاول مرة أخرى")
+        db.collection("users").document(u).collection("addresses").document(addressId).delete().await()
+    }
+
+    // ─── Orders ─────────────────────────────────────────────────
+    // ✅ إصلاح حرج: كان يُخزَّن في paymentReceipt فقط `receiptUri.lastPathSegment`
+    // (وهو أحياناً معرّف رقمي داخلي من موفّر المحتوى على الجهاز، لا علاقة له بأي
+    // صورة فعلية) بدل رفع الصورة ثم تخزين رابط تنزيلها الحقيقي. هذا ما جعل زر
+    // "التحقق من الإيصال" في لوحة تحكم الموقع يفتح روابط خاطئة مثل
+    // https://eleven-sd.com/admin/1000314108 بدل صورة الإيصال الفعلية من
+    // Firebase Storage. الآن نرفع الصورة فعلياً ونعيد رابط تنزيل حقيقي وصالح.
+    suspend fun uploadPaymentReceipt(context: Context, uri: Uri): String {
+        requireOnline()
+        val u = uid ?: throw IllegalStateException("يجب تسجيل الدخول لرفع إيصال الدفع")
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalStateException("تعذر قراءة صورة الإيصال المختارة")
+        // ✅ (Audit) تحقق مسبق بدل انتظار رفض قواعد Storage الغامض (permission-denied):
+        // الحد 10MB مطابق لـstorage.rules، وناقل المحتوى يُحدَّد صراحةً لأن القاعدة
+        // تشترط image/(jpeg|png|webp|gif) — رفع بلا نوع محتوى يُرفض بصمت مربك للمستخدم.
+        if (bytes.isEmpty()) throw IllegalStateException("صورة الإيصال فارغة، اختر صورة أخرى")
+        if (bytes.size > 10 * 1024 * 1024) {
+            throw IllegalStateException("حجم صورة الإيصال كبير جداً (الحد الأقصى 10MB)")
+        }
+        val mime = context.contentResolver.getType(uri)
+            ?.takeIf { it in setOf("image/jpeg", "image/png", "image/webp", "image/gif") }
+            ?: "image/jpeg"
+        val meta = com.google.firebase.storage.StorageMetadata.Builder().setContentType(mime).build()
+        val ref = storage.reference.child("receipts/$u/${System.currentTimeMillis()}.jpg")
+        return withNetworkTimeout(90_000L) {
+            ref.putBytes(bytes, meta).await()
+            ref.downloadUrl.await().toString()
+        }
+    }
+
+    suspend fun getOrders(): List<Order> {
+        val u = uid ?: return emptyList()
+        return try {
+            db.collection("orders")
+                .whereEqualTo("userId", u)
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .get().await()
+                .documents.mapNotNull { it.toOrder() }    // ← قراءة يدوية آمنة
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getOrders failed: ${e.message}", e)
+            lastProductsError = "getOrders: ${e.message}"
+            // Fallback بدون orderBy
+            try {
+                db.collection("orders")
+                    .whereEqualTo("userId", u)
+                    .get().await()
+                    .documents.mapNotNull { it.toOrder() }
+                    .sortedByDescending { it.createdAt?.seconds }
+            } catch (e2: Exception) {
+                Log.e("FirestoreRepo", "getOrders fallback failed: ${e2.message}", e2)
+                emptyList()
+            }
+        }
+    }
+
+    // ✅ إصلاح ثغرة حرجة: كانت هذه الدالة تُرجع أي طلب بمجرد معرفة رقم مستنده (orderId)
+    // دون أي تحقق من أن المستخدم الحالي هو صاحب الطلب فعلاً — أي رابط مباشر لفاتورة
+    // كان يفتح فاتورة أي مستخدم آخر بكل بياناته. الآن نتحقق محلياً من ملكية الطلب
+    // (userId == uid الحالي) قبل إرجاعه، ونُرجع null (= "غير مصرح/غير موجود" من منظور
+    // العميل) إن لم يكن المستخدم هو المالك. الحماية الملزمة الفعلية هي قواعد Firestore
+    // (راجع firestore.rules) لأن أي تحقق داخل التطبيق يمكن تجاوزه من عميل معدَّل.
+    suspend fun getOrder(orderId: String): Order? {
+        val currentUid = uid ?: return null
+        return try {
+            val doc = db.collection("orders").document(orderId).get().await()
+            val order = doc.toOrder() ?: return null
+            if (order.userId != currentUid) {
+                Log.w("FirestoreRepo", "getOrder($orderId) unauthorized access attempt by $currentUid (owner=${order.userId})")
+                return null
+            }
+            order
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "getOrder($orderId) failed: ${e.message}", e)
+            null
+        }
+    }
+
+    // ─── Coupons ──────────────────────────────────────────────────
+    // نفس قواعد التحقق المستخدمة في placeOrder (وفي السيرفر بالموقع) حتى لا يختلف
+    // السلوك بين المعاينة قبل الدفع والتنفيذ الفعلي عند إتمام الطلب.
+    private fun evaluateCoupon(coupon: Coupon?, subtotal: Double): CouponResult {
+        if (coupon == null) return CouponResult.Invalid("كود الخصم غير صالح")
+        if (!coupon.isActive) return CouponResult.Invalid("كود الخصم غير مُفعّل حالياً")
+        coupon.expiresAt?.let {
+            if (it.toDate().time < System.currentTimeMillis()) {
+                return CouponResult.Invalid("انتهت صلاحية كود الخصم")
+            }
+        }
+        if (subtotal < coupon.minOrderAmount) {
+            return CouponResult.Invalid("الحد الأدنى للطلب لاستخدام هذا الكود ${coupon.minOrderAmount} ج.س")
+        }
+        if (coupon.usageLimit > 0 && coupon.usageCount >= coupon.usageLimit) {
+            return CouponResult.Invalid("تم استنفاد عدد مرات استخدام هذا الكود")
+        }
+        val discount = if (coupon.discountType == "percentage")
+            subtotal * (coupon.discountValue / 100.0)
+        else
+            minOf(coupon.discountValue, subtotal)
+        return CouponResult.Valid(discountAmount = Math.round(discount * 100) / 100.0, coupon = coupon)
+    }
+
+    /** معاينة فورية قبل الدفع — قراءة فقط، لا تلمس عدّاد الاستخدام. */
+    suspend fun validateCoupon(code: String, subtotal: Double): CouponResult {
+        return try {
+            val doc = db.collection("coupons").document(code.trim().uppercase()).get().await()
+            val coupon = doc.toObject(Coupon::class.java)?.copy(code = doc.id)
+            evaluateCoupon(if (doc.exists()) coupon else null, subtotal)
+        } catch (e: Exception) {
+            CouponResult.Invalid("تعذر التحقق من كود الخصم")
+        }
+    }
+
+    // ✅ جديد: التحقق من مناطق التوصيل — خط دفاع إضافي على مستوى العميل نفسه
+    // (تجربة مستخدم أوضح: رسالة فورية قبل محاولة الكتابة أصلاً)، بينما خط
+    // الدفاع الحقيقي غير القابل للتجاوز يبقى firestore.rules (bbox تقريبي)
+    // + السيرفر (delivery-zone-service.ts، مضلّع دقيق، لمسار الموقع). نفس
+    // مبدأ evaluateCoupon أعلاه: تكرار مقصود للتحقق، وليس اعتماداً عليه فقط.
+    // ✅ إصلاح: استُخرجت قراءة/تحليل مناطق التوصيل الفعّالة إلى دالة مشتركة
+    // بدل تكرارها — يستخدمها كل من assertWithinDeliveryZone (تحقق نهائي قاطع
+    // عند تأكيد الطلب) وisLocationInDeliveryZone الجديدة أدناه (تحقق مبكر غير
+    // قاطع من واجهة اختيار الموقع بالخريطة). null = تعذّر القراءة (لا نمنع
+    // بسبب هذا وحده)، قائمة فارغة = الميزة غير مفعّلة أصلاً (لا مناطق محفوظة
+    // أو كلها معطّلة)، غير ذلك = مضلّعات المناطق الفعّالة.
+    private suspend fun getActiveDeliveryZonePolygons(): List<List<Pair<Double, Double>>>? {
+        val zonesDoc = try {
+            db.collection("settings").document("deliveryZones").get().await()
+        } catch (e: Exception) {
+            return null // تعذّر القراءة (غالباً بلا اتصال مؤقت أثناء الانتقال)
+        }
+        @Suppress("UNCHECKED_CAST")
+        val zonesRaw = zonesDoc.get("zones") as? List<Map<String, Any?>> ?: emptyList()
+        val activeZones = zonesRaw.filter { it["isActive"] == true }
+        if (activeZones.isEmpty()) return emptyList()
+        return activeZones.map { zone ->
+            @Suppress("UNCHECKED_CAST")
+            (zone["polygon"] as? List<Map<String, Any?>>)
+                ?.mapNotNull { pt ->
+                    val lat = (pt["lat"] as? Number)?.toDouble()
+                    val lng = (pt["lng"] as? Number)?.toDouble()
+                    if (lat != null && lng != null) lat to lng else null
+                } ?: emptyList()
+        }
+    }
+
+    private suspend fun assertWithinDeliveryZone(address: Address?) {
+        val polygons = getActiveDeliveryZonePolygons() ?: return
+        if (polygons.isEmpty()) return // الميزة غير مفعّلة أصلاً
+
+        if (address == null || !address.hasLocation) {
+            throw IllegalStateException("يجب تحديد موقعك على الخريطة لإتمام الطلب — عنوانك خارج نطاق مناطق التوصيل المتاحة")
+        }
+
+        val insideAnyZone = polygons.any { polygon ->
+            polygon.size >= 3 && isPointInPolygon(address.latitude, address.longitude, polygon)
+        }
+        if (!insideAnyZone) {
+            throw IllegalStateException("عذراً، موقع التوصيل الذي حدّدته يقع خارج مناطق التوصيل المعتمدة حالياً")
+        }
+    }
+
+    /**
+     * ✅ جديد: تحقق مبكر غير قاطع (لا يرمي استثناء) يُستدعى مباشرة من نموذج
+     * اختيار العنوان (AddressFormCard) فور تحريك دبوس الخريطة — بدل ترك
+     * المستخدم يُكمل كل خطوات الدفع ليُفاجأ برفض الطلب بالنهاية فقط. يُرجع
+     * true لو الموقع مقبول (داخل منطقة فعّالة، أو الميزة غير مفعّلة أصلاً، أو
+     * تعذّر التحقق مؤقتاً)، وfalse فقط لو تأكّدنا أن هناك مناطق توصيل فعّالة
+     * وأن هذا الموقع بالذات يقع خارجها جميعاً. الخط الدفاعي غير القابل
+     * للتجاوز يبقى دائماً assertWithinDeliveryZone أعلاه (عند placeOrder)
+     * بالإضافة لتحقق مطابق تماماً على السيرفر (delivery-zone-service.ts).
+     */
+    suspend fun isLocationInDeliveryZone(lat: Double, lng: Double): Boolean {
+        val polygons = getActiveDeliveryZonePolygons() ?: return true
+        if (polygons.isEmpty()) return true
+        return polygons.any { polygon -> polygon.size >= 3 && isPointInPolygon(lat, lng, polygon) }
+    }
+
+    // خوارزمية Ray Casting القياسية — نفس منطق shared/deliveryZones.ts::isPointInPolygon بالضبط
+    private fun isPointInPolygon(lat: Double, lng: Double, polygon: List<Pair<Double, Double>>): Boolean {
+        var inside = false
+        var j = polygon.size - 1
+        for (i in polygon.indices) {
+            val (yi, xi) = polygon[i]
+            val (yj, xj) = polygon[j]
+            val intersects = (yi > lat) != (yj > lat) &&
+                lng < (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if (intersects) inside = !inside
+            j = i
+        }
+        return inside
+    }
+
+    /**
+     * ✅ الطلب يُنشأ على السيرفر عبر Cloud Function `placeOrder`
+     * (functions/src/callables/placeOrder.ts) بدل كتابته مباشرة من التطبيق.
+     *
+     * السبب: كانت القواعد تسمح لأي حساب موثَّق بإنقاص المخزون وزيادة العدّاد واستخدام الكوبون
+     * مباشرة (استنزاف مخزون/حرق كوبون بلا طلب) ولا تقارن الكمية بالمخزون. الآن المخزون والكوبون
+     * والعدّاد ومستند الطلب تُكتب كلها داخل transaction واحدة على السيرفر (Admin SDK)، والقواعد
+     * ترفض أي كتابة مباشرة عليها. السعر والشحن والخصم والمنطقة تُشتق كلها هناك، لا من التطبيق.
+     *
+     * الإشعارات (العميل + الأدمن + Push) تصل تلقائياً من trigger `onOrderCreated` بمجرد إنشاء
+     * مستند الطلب — لا كتابة إشعار هنا. تفريغ السلة يبقى من ViewModel (clearCart) بعد النجاح.
+     */
+    // ✅ معرّف idempotency: يبقى ثابتاً لإعادة محاولة *نفس* الطلب (نفس السلة/العنوان/الكوبون/الإيصال)
+    // بعد انقطاع شبكة محتمل النجاح على السيرفر، فيُرجع السيرفر الطلب الأول بدل إنشاء طلب مكرَّر
+    // وخصم مخزون مرتين. يُصفَّر عند النجاح أو عند رفض قاطع من السيرفر، ويتغيّر تلقائياً لو تغيّر الطلب.
+    private var pendingOrderRequest: Pair<String, String>? = null
+
+    private fun orderRequestIdFor(fingerprint: String): String {
+        val pending = pendingOrderRequest
+        if (pending != null && pending.first == fingerprint) return pending.second
+        val id = java.util.UUID.randomUUID().toString().replace("-", "")
+        pendingOrderRequest = fingerprint to id
+        return id
+    }
+
+    suspend fun placeOrder(order: Order, couponCode: String? = null): String {
+        requireOnline()
+        uid ?: throw IllegalStateException("يجب تسجيل الدخول لإتمام الطلب")
+        // فحص مبكر بلا شبكة برسالة واضحة (السيرفر يعيد نفس التحقق ويدمج المكرَّر أيضاً)
+        if (order.items.isEmpty() ||
+            order.items.any { it.quantity <= 0 } ||
+            order.items.map { it.productId }.distinct().size != order.items.size
+        ) {
+            throw IllegalStateException("بيانات الطلب غير صالحة، حدّث السلة وحاول مرة أخرى")
+        }
+        // فحص مبكر غير قاطع لتجربة أسرع؛ التحقق القاطع بالسيرفر (assertWithinDeliveryZone هناك)
+        assertWithinDeliveryZone(order.shippingAddress)
+        val address = order.shippingAddress
+            ?: throw IllegalStateException("يرجى تحديد عنوان التوصيل")
+
+        val fingerprint = listOf(
+            order.items.sortedBy { it.productId }.joinToString(",") { "${it.productId}x${it.quantity}" },
+            couponCode?.trim()?.uppercase().orEmpty(),
+            "${address.id}|${address.phone}|${address.city}|${address.address}|${address.latitude}|${address.longitude}",
+            order.paymentMethod, order.paymentReceipt, order.notes,
+        ).joinToString("#")
+
+        val payload = hashMapOf<String, Any?>(
+            "requestId" to orderRequestIdFor(fingerprint),
+            "items" to order.items.map { mapOf("productId" to it.productId, "quantity" to it.quantity) },
+            "couponCode" to couponCode?.trim()?.uppercase(),
+            "shippingAddress" to mapOf(
+                "id" to address.id,
+                "fullName" to address.displayName,
+                "name" to address.displayName,
+                "phone" to address.phone,
+                "city" to address.city,
+                "address" to address.address,
+                "latitude" to address.latitude,
+                "longitude" to address.longitude,
+                "isDefault" to address.isDefault,
+            ),
+            "paymentMethod" to order.paymentMethod,
+            "paymentReceipt" to order.paymentReceipt,
+            "notes" to order.notes,
+        )
+        try {
+            val result = functions.getHttpsCallable("placeOrder").call(payload).await()
+            val data = result.data as? Map<*, *>
+            val id = data?.get("id") as? String
+                ?: throw IllegalStateException("تعذّر إنشاء الطلب، حاول مرة أخرى")
+            pendingOrderRequest = null
+            return id
+        } catch (e: com.google.firebase.functions.FirebaseFunctionsException) {
+            // رفض قاطع من السيرفر (مخزون/كوبون/منطقة...) = لم يُنشأ طلب، فالمحاولة القادمة معرّف جديد.
+            // أخطاء الشبكة/الداخلية (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL) نُبقي معرّفها للإعادة الآمنة.
+            when (e.code) {
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNAVAILABLE,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.DEADLINE_EXCEEDED,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.INTERNAL,
+                com.google.firebase.functions.FirebaseFunctionsException.Code.UNKNOWN -> Unit
+                else -> pendingOrderRequest = null
+            }
+            throw IllegalStateException(friendlyCallableError(e, "تعذّر إتمام الطلب، حاول مرة أخرى"), e)
+        }
+    }
+
+    /**
+     * رسائل أخطاء الـCallables التي نرميها عمداً بالسيرفر (HttpsError بالعربية: مخزون، كوبون، منطقة
+     * توصيل، حد معدل...) تُعرض كما هي؛ أي خطأ داخلي/شبكة يُستبدل برسالة عامة بدل نص إنجليزي تقني.
+     */
+    private fun friendlyCallableError(
+        e: com.google.firebase.functions.FirebaseFunctionsException,
+        fallback: String,
+    ): String = when (e.code) {
+        com.google.firebase.functions.FirebaseFunctionsException.Code.INVALID_ARGUMENT,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.FAILED_PRECONDITION,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.PERMISSION_DENIED,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.UNAUTHENTICATED,
+        com.google.firebase.functions.FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED ->
+            e.message?.takeIf { it.isNotBlank() } ?: fallback
+        else -> fallback
+    }
+
+    // ─── Notifications (v2) ───────────────────────────────────────
+    // ⚠️ لا توجد أي دالة كتابة مباشرة على Firestore هنا بعد الآن — كل إنشاء
+    // إشعار يتم حصراً عبر Cloud Functions (Admin SDK)، انظر placeOrder أعلاه
+    // وorderTriggers.ts. القراءة فقط real-time تبقى مباشرة (مسموحة بقواعد
+    // الأمان)، والتعديل (قراءة/حذف) يمر عبر Callable Functions أدناه.
+
+    // نسخة لحظية (real-time) عبر addSnapshotListener — لا يوجد استعلام "لمرّة
+    // واحدة" منفصل هنا عمداً: أي إشعار جديد (Push من السيرفر يكتب هنا، أو
+    // onMessageReceived بتطبيق الأندرويد نفسه) يظهر فوراً بقائمة الإشعارات
+    // وبعداد "غير المقروء" بالهيدر دون أي تأخير أو حاجة لإعادة الجلب يدوياً.
+    // onError يُبلَّغ للمستدعي (بدل Log فقط) — بدونه، أي خطأ (مثال: فهرس
+    // Firestore مركّب غير مُفعّل بعد) يجعل القائمة تبقى فارغة للأبد بصمت تام.
+    fun observeNotifications(onError: (Throwable) -> Unit = {}): Flow<List<NotificationItem>> = callbackFlow {
+        val u = uid ?: run { trySend(emptyList()); awaitClose {}; return@callbackFlow }
+        val listener = db.collection("users").document(u).collection("notifications")
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(50)
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    Log.e("FirestoreRepo", "observeNotifications failed: ${error.message}", error)
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                // ✅ تحصين إضافي (دفاع ثانٍ بعد إصلاح actionRoute/imageUrl بالأعلى
+                // في Models.kt): toObject() يرمي استثناءً غير مُلتقَط تلقائياً
+                // لأي مستند لا يطابق شكل NotificationItem تماماً — وهذا الاستثناء
+                // يحدث هنا داخل callback مباشر من Firestore SDK نفسه (ليس داخل
+                // كوروتين قابل لالتقاطه من مستوى أعلى)، فيُسقِط التطبيق بالكامل.
+                // بدل تعطّل القائمة كلها بسبب مستند واحد غير متوقّع مستقبلاً
+                // (تعديل يدوي بالبيانات، حقل جديد بنوع مختلف...)، نتجاهل ذلك
+                // المستند تحديداً فقط ونعرض الباقي بأمان.
+                val items = snap?.documents?.mapNotNull { doc ->
+                    try {
+                        doc.toObject(NotificationItem::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.e("FirestoreRepo", "تعذّر تحويل إشعار ${doc.id}، تم تجاهله", e)
+                        null
+                    }
+                } ?: emptyList()
+                trySend(items)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // ✅ v2: تعليم "مقروء"/الحذف كتابة مباشرة على Firestore (Client SDK) —
+    // مسموحة الآن بقواعد الأمان (محصورة بحقلي isRead/readAt فقط للتعديل)،
+    // وتُصان تلقائياً بطابور offline محلي من Firestore SDK نفسه عند انقطاع
+    // الاتصال، تُزامَن فور عودته دون أي كود إضافي. عدّاد notifUnreadCount لا
+    // يتأثر بهذه الكتابة مباشرة — يُسوّى ذرّياً بواسطة Cloud Function مستقلة
+    // (notificationCounterTrigger.ts) تلاحظ هذه الكتابة نفسها بصرف النظر عن
+    // مصدرها، فيبقى صحيحاً ومطابقاً لما يعرضه الموقع دون أي استدعاء إضافي هنا.
+    // ✅ إصلاح (نفس فئة مشكلة السلة/المفضلة بلا إنترنت): كانت هذه الدوال بلا
+    // requireOnline() — الـ optimistic update بالـ ViewModel (تحديث القائمة
+    // محلياً فوراً + تراجع عند catch) يعتمد على أن الكتابة *تفشل* بوضوح لو
+    // بلا اتصال، لكن Firestore لا يفشل فوراً بلا نت (يُبقي الكتابة معلّقة
+    // بصمت بانتظار عودة الشبكة) — فلا يُستدعى catch أصلاً، ويبقى الإشعار
+    // "مقروء"/"محذوف" محلياً للأبد دون أن يتزامن فعلياً مع الخادم.
+    suspend fun markNotificationRead(notifId: String) {
+        requireOnline()
+        val u = uid ?: return
+        db.collection("users").document(u).collection("notifications")
+            .document(notifId)
+            .update(mapOf("isRead" to true, "readAt" to Timestamp.now()))
+            .await()
+    }
+
+    suspend fun markAllNotificationsRead() {
+        requireOnline()
+        val u = uid ?: return
+        val unread = db.collection("users").document(u).collection("notifications")
+            .whereEqualTo("isRead", false)
+            .get().await()
+        if (unread.isEmpty) return
+        val now = Timestamp.now()
+        val batch = db.batch()
+        unread.documents.forEach { batch.update(it.reference, mapOf("isRead" to true, "readAt" to now)) }
+        batch.commit().await()
+    }
+
+    suspend fun deleteNotification(notifId: String) {
+        requireOnline()
+        val u = uid ?: return
+        db.collection("users").document(u).collection("notifications")
+            .document(notifId).delete().await()
+    }
+
+    // حذف كل إشعارات المستخدم دفعة واحدة (زر "حذف الكل") — نفس السلوك
+    // المتاح في نسخة الموقع (deleteAllNotifications بالسيرفر).
+    suspend fun deleteAllNotifications() {
+        requireOnline()
+        val u = uid ?: return
+        val all = db.collection("users").document(u).collection("notifications")
+            .get().await()
+        if (all.isEmpty) return
+        val batch = db.batch()
+        all.documents.forEach { batch.delete(it.reference) }
+        batch.commit().await()
+    }
+
+    // ✅ جديد v2: عداد "غير المقروء" الحقيقي — حقل مشتق يُحدَّث ذرّياً على
+    // السيرفر (Cloud Function) مع كل إنشاء/تعليم كمقروء/حذف، بدل عدّ عناصر
+    // observeNotifications أعلاه (محدودة بـlimit(50) — تُعطي رقماً خاطئاً
+    // بمجرد تجاوز غير المقروء هذا الحد). هذا هو نفس الحقل الذي يقرأه جرس
+    // الإشعارات بالموقع مباشرة، فيتطابق الرقم المعروض على المنصتين دوماً.
+    fun observeUnreadCount(): Flow<Int> = callbackFlow {
+        val u = uid ?: run { trySend(0); awaitClose {}; return@callbackFlow }
+        val listener = db.collection("users").document(u)
+            .addSnapshotListener { snap, error ->
+                if (error != null) {
+                    Log.e("FirestoreRepo", "observeUnreadCount failed: ${error.message}", error)
+                    return@addSnapshotListener
+                }
+                trySend((snap?.getLong("notifUnreadCount") ?: 0L).toInt().coerceAtLeast(0))
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // ─── FCM Token ──────────────────────────────────────────────
+    // ✅ إصلاح: كان يُكتب سابقاً في حقل "fcmToken" (مفرد)، بينما يقرأ السيرفر/الموقع من
+    // "fcmTokens" (مصفوفة) — ما كان يعني عملياً أن إشعارات الـPush لا تصل لأي مستخدم أندرويد.
+    // الآن نستخدم نفس الحقل والبنية (arrayUnion) المستخدمة في الموقع، وتدعم تعدد الأجهزة لنفس المستخدم.
+    suspend fun updateFcmToken(token: String) {
+        val u = uid ?: return
+        db.collection("users").document(u)
+            .set(
+                mapOf("fcmTokens" to com.google.firebase.firestore.FieldValue.arrayUnion(token)),
+                com.google.firebase.firestore.SetOptions.merge()
+            )
+            .await()
+    }
+
+    /**
+     * يُستدعى بعد كل تسجيل دخول/تسجيل ناجح لضمان تسجيل توكن FCM الحالي فوراً —
+     * يعالج مشكلة توكن يُنشأ قبل تسجيل الدخول (onNewToken وحده لا يعيد المحاولة لاحقاً).
+     */
+    suspend fun syncFcmToken() {
+        try {
+            val token = com.google.firebase.messaging.FirebaseMessaging.getInstance().token.await()
+            updateFcmToken(token)
+        } catch (e: Exception) {
+            Log.e("FirestoreRepo", "syncFcmToken failed: ${e.message}", e)
+        }
+    }
+}

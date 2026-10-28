@@ -1,0 +1,312 @@
+package com.eleven.store.data.model
+
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
+
+// ─── User Profile ──────────────────────────────────────────────
+// مطابق لوثيقة users/{uid} في Firestore (نفس ما يقرأه/يكتبه الموقع)
+@IgnoreExtraProperties
+data class UserProfile(
+    val id: String = "",
+    val name: String = "",
+    val email: String = "",
+    val phone: String = "",
+)
+
+// ─── Product ───────────────────────────────────────────────────
+// ⚠️ @IgnoreExtraProperties ضروري: مستند المنتج فيه حقول زائدة غير
+// موجودة بهذا الكلاس (basePrice, discountType, discountValue, updatedAt).
+// بدون هذا الأنوتيشن، Firestore يرمي Exception عند toObject() وهذا كان
+// سبب فشل جلب المنتجات بالكامل (مع أو بدون فلتر). createdAt نفسه أصبح
+// حقلاً مُعرَّفاً أدناه (يُستخدم لحساب isNew) وليس من الحقول الزائدة.
+@IgnoreExtraProperties
+data class Product(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val price: Double = 0.0,
+    val originalPrice: Double? = null,
+    val images: List<String> = emptyList(),
+    val image: String = "",
+    val categoryId: String = "",
+    val brandId: String = "",
+    val stock: Int = 0,
+    val isFeatured: Boolean = false,
+    val isBestSeller: Boolean = false,
+    val isOnSale: Boolean = false,     // الحقل الحقيقي في Firestore
+    // ⚠️ تم حذف حقل onSale المكرر — كان يتعارض مع isOnSale على مستوى
+    // getters في جافا (isOnSale() مقابل getOnSale()) ويسبب
+    // RuntimeException: Found conflicting getters for name isOnSale
+    // عند كل عملية toObject(Product::class.java)، وهذا كان السبب
+    // الحقيقي لفشل جلب كل المنتجات بدون استثناء.
+    val tags: List<String> = emptyList(),
+    // ✅ إصلاح: لا يوجد حقل isNew Boolean في مستند المنتج إطلاقاً (نفس ما
+    // توثقه FirestoreRepository.getProducts وAlgoliaSearchService عند فلترة
+    // "جديد" بنافذة تاريخية بدل حقل وهمي). كان isNew سابقاً حقلاً مخزَّناً
+    // بقيمة افتراضية false تُقرأ حرفياً من toObject()/من نتائج Algolia حيث لا
+    // يوجد الحقل أصلاً — فتبقى false دائماً، ما يعني أن شارة "جديد" في شاشة
+    // تفاصيل المنتج (ProductDetailScreen) لم تكن تظهر إطلاقاً لأي منتج مهما
+    // كان حديثاً. الآن نحسبها من createdAt بنفس نافذة الـ30 يوماً المستخدمة
+    // في كل مكان آخر بالتطبيق.
+    val createdAt: Timestamp? = null,
+) {
+    val mainImage: String get() = images.firstOrNull()?.takeIf { it.isNotBlank() } ?: image
+    val discountPercent: Int?
+        get() = if (originalPrice != null && originalPrice > price)
+            ((1 - price / originalPrice) * 100).toInt() else null
+
+    val isNew: Boolean
+        get() {
+            val created = createdAt?.toDate()?.time ?: return false
+            return System.currentTimeMillis() - created <= NEW_PRODUCT_WINDOW_MS
+        }
+
+    companion object {
+        // يجب أن تبقى مطابقة لنفس القيمة في FirestoreRepository.getProducts
+        // وAlgoliaSearchService.NEW_PRODUCT_WINDOW_MS وclient/src/lib/algolia.ts بالموقع
+        const val NEW_PRODUCT_WINDOW_MS = 30L * 24 * 60 * 60 * 1000
+    }
+}
+
+// ─── Category ──────────────────────────────────────────────────
+@IgnoreExtraProperties
+data class Category(
+    val id: String = "",
+    val name: String = "",
+    val image: String = "",
+    val order: Int = 0,
+    val isActive: Boolean = true,
+)
+
+// ─── Brand ─────────────────────────────────────────────────────
+@IgnoreExtraProperties
+data class Brand(
+    val id: String = "",
+    val name: String = "",
+    val logo: String = "",
+    val link: String = "",
+    val isActive: Boolean = true,
+)
+
+// ─── Banner ────────────────────────────────────────────────────
+// حقول مطابقة 100% لمجموعة "banners" في Firestore
+@IgnoreExtraProperties
+data class Banner(
+    val id: String = "",
+    val title: String = "",
+    val description: String = "",
+    val image: String = "",
+    val cta: String = "كشف الجديد",
+    val link: String = "",
+    val order: Int = 0,
+    val isActive: Boolean = true,   // ← مطلوب لفلتر Firestore
+)
+
+// ─── Cart ──────────────────────────────────────────────────────
+@IgnoreExtraProperties
+data class CartItem(
+    val id: String = "",
+    val productId: String = "",
+    val name: String = "",
+    val price: Double = 0.0,
+    val quantity: Int = 1,
+    val image: String = "",
+    // ✅ يُملأ من بيانات المنتج الحية عند القراءة (نفس منطق getCart بالموقع)، وليس مخزّناً في مستند السلة نفسه
+    val stock: Long = 0L,
+) {
+    val total: Double get() = price * quantity
+}
+
+// ─── Order ─────────────────────────────────────────────────────
+// حقول مطابقة 100% لمجموعة "orders" في Firestore (نفس الحقول التي يستخدمها الموقع)
+@IgnoreExtraProperties
+data class Order(
+    val id: String = "",
+    val orderNumber: String = "",
+    val userId: String = "",
+    val items: List<CartItem> = emptyList(),
+    val total: Double = 0.0,
+    val subtotal: Double = 0.0,
+    val shippingCost: Double = 0.0,
+    val discount: Double = 0.0,
+    val couponCode: String? = null,
+    val status: OrderStatus = OrderStatus.UNDER_REVIEW,
+    val shippingAddress: Address? = null,   // ← نفس اسم الحقل في الموقع (shippingAddress)، بدل address
+    val paymentMethod: String = "",
+    val paymentReceipt: String = "",
+    val verificationToken: String = "",     // ← يُستخدم لبناء رابط التحقق وQR في الفاتورة
+    val notes: String = "",
+    val createdAt: Timestamp? = null,
+)
+
+// ✅ إعادة تنظيم جذرية: كانت حالة الطلب (OrderStatus) وحالة الدفع
+// (paymentStatus كنص منفصل) حقلين مستقلّين تماماً بنفس الطلب — الآن حقل
+// status واحد فقط بستّ حالات تمثّل دورة حياة الطلب كاملة (بما فيها فشل
+// الدفع). نفس القيم الست حرفياً بالموقع/لوحة التحكم
+// (panel/shared/types.ts::OrderStatus) وبنفس الألوان
+// (ui/theme/Theme.kt::OrderStatusColors).
+enum class OrderStatus(val label: String) {
+    UNDER_REVIEW("قيد المراجعة"),
+    PROCESSING("قيد التجهيز"),
+    OUT_FOR_DELIVERY("قيد التوصيل"),
+    DELIVERED("تم التسليم"),
+    CANCELLED("ملغي"),
+    PAYMENT_FAILED("دفع فاشل");
+
+    companion object {
+        fun from(value: String): OrderStatus =
+            entries.find { it.name.lowercase() == value.lowercase() } ?: UNDER_REVIEW
+    }
+}
+
+// ─── Address ───────────────────────────────────────────────────
+@IgnoreExtraProperties
+data class Address(
+    val id: String = "",
+    val fullName: String = "",
+    val name: String = "",      // بعض السجلات القديمة تستخدم name بدل fullName (نفس منطق الموقع: fullName || name)
+    val phone: String = "",
+    val city: String = "",
+    val address: String = "",
+    // ✅ إصلاح حرج: getter الحقيقي لـKotlin لخاصية تبدأ بـ"is" هو isDefault()
+    // نفسه (بلا "get" إضافية) — لكن Firestore's POJO mapper يتعامل معه كـ
+    // JavaBean boolean getter عادي، فيزيل بادئة "is" ويحوّل الحرف التالي
+    // لصغير، فيكتب الحقل فعلياً باسم "default" وليس "isDefault" بالمستند!
+    // النتيجة: ref.set(address) بـaddAddress()/updateAddress() لم يكن يكتب
+    // حقل "isDefault" إطلاقاً — بينما قاعدة الأمان isValidAddress() تشترط
+    // data.isDefault is bool صراحة، فتفشل الكتابة PERMISSION_DENIED لكل
+    // إنشاء/تعديل عنوان (وبما أن حفظ العنوان يتطلب تحديد موقع بالخريطة أولاً
+    // بواجهة المستخدم، يظهر العطل وكأنه مرتبط بالخريطة تحديداً بينما هو في
+    // الحقيقة يصيب كل حفظ عنوان بلا استثناء). @PropertyName يفرض الاسم
+    // الصريح "isDefault" بالقراءة والكتابة معاً، مطابقاً لما تتوقعه القاعدة
+    // ولما تكتبه unsetOtherDefaults() يدوياً عبر batch.update(..., "isDefault", ...).
+    @get:PropertyName("isDefault") @set:PropertyName("isDefault")
+    var isDefault: Boolean = false,
+    // ✅ إحداثيات الموقع من خرائط جوجل (اختيارية — 0.0 يعني لم يُحدَّد بعد،
+    // العنوان النصي أعلاه يبقى المصدر الأساسي، هذي فقط لتسهيل التوصيل)
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+) {
+    val displayName: String get() = fullName.ifBlank { name }
+    val hasLocation: Boolean get() = latitude != 0.0 || longitude != 0.0
+}
+
+// ─── Store Settings ────────────────────────────────────────────
+// حقول مطابقة لمجموعة settings/store في Firestore (نفس ما يقرأه الموقع)
+@IgnoreExtraProperties
+data class StoreSettings(
+    val storeName: String = "Eleven Store",
+    val logo: String = "",
+    val address: String = "",                 // عنوان المتجر (يظهر في رأس الفاتورة)
+    val phone: String = "",
+    val email: String = "",
+    val websiteUrl: String = "",              // رابط الموقع (لبناء رابط verify-order/{token} في رمز QR)
+    val currency: String = "ج.س",
+    val currencySymbol: String = "ج.س",
+    val shippingCost: Double = 0.0,
+    val freeShippingThreshold: Double = 0.0,  // ← نفس اسم الحقل في السيرفر
+    val bankName: String = "",
+    val bankAccountName: String = "",
+    val bankAccountNumber: String = "",
+    val whatsapp: String = "",
+    val instagram: String = "",
+    val facebook: String = "",
+    val twitter: String = "",
+    val aboutText: String = "",
+    val storeDescription: String = "",
+    val storeVision: String = "",
+    val storeMission: String = "",
+    val storeAboutImage: String = "",
+    // ✅ ألوان قابلة للتخصيص من لوحة التحكم (تبويب "المظهر" في الإعدادات) —
+    // قيمة فارغة "" تعني: لا تخصيص، استخدم لون التصميم الافتراضي في Theme.kt.
+    // راجع ElevenStoreTheme في ui/theme/Theme.kt لكيفية تطبيقها.
+    val primaryColor: String = "",
+    val secondaryColor: String = "",
+    val backgroundColor: String = "",
+    // ✅ توسعة نظام الثيمات لتغطية الست ألوان المقترحة (Primary/Secondary/
+    // Background/Surface/Text/Accent) بدل ثلاثة فقط. نسخة الوضع الداكن من
+    // Background/Surface/Text تُشتق حسابياً في Theme.kt (deriveDarkVariant)
+    // وليست حقلاً مخزَّناً منفصلاً — يكفي الأدمن اختيار ثيم واحد فقط.
+    val surfaceColor: String = "",
+    val textColor: String = "",
+    val accentColor: String = "",
+) {
+    // اسم متوافق مع الكود القديم في الشاشات (checkout كان يستخدم freeShippingMinOrder)
+    val freeShippingMinOrder: Double get() = freeShippingThreshold
+}
+
+// ─── Notification ──────────────────────────────────────────────
+// مصدر الحقيقة الوحيد: users/{uid}/notifications (نفس المستند حرفياً الذي
+// يقرأه/يكتبه السيرفر وموقع الويب — راجع notification-service.ts و
+// shared/types.ts::AppNotification).
+@IgnoreExtraProperties
+data class NotificationItem(
+    val id: String = "",
+    val title: String = "",
+    val body: String = "",
+    val type: String = "",
+    val isRead: Boolean = false,
+    // 🐛 إصلاح جذري (سبب انهيار التطبيق فوراً عند تسجيل الدخول): كلا الحقلين
+    // كانا معرَّفين هنا كـString غير قابل للـnull (بقيمة افتراضية "")، بينما
+    // كل من functions/src/lib/notifications.ts وserver/notification-service.ts
+    // يكتبان دائماً "actionRoute: input.actionRoute ?? null" و
+    // "imageUrl: input.imageUrl ?? null" — أي قيمة null صريحة بالمستند نفسه
+    // (وليس حقلاً غائباً تماماً) كلما لم يُمرَّر أيهما، وهي الحالة الشائعة
+    // فعلاً: imageUrl لا يُمرَّر إطلاقاً لأي إشعار طلب (تأكيد طلب/تغيّر حالة)،
+    // وactionRoute نفسه اختياري بالبث اليدوي من لوحة التحكم (adminNotificationsRouter).
+    // القيمة الافتراضية Kotlin ("") تُستخدَم فقط عندما يكون الحقل *غائباً*
+    // تماماً عن المستند — أما عندما يكون موجوداً بقيمة null صريحة فإن
+    // toObject() يحاول إسناد null لنوع غير قابل للـnull ويرمي استثناءً فوراً
+    // داخل addSnapshotListener (observeNotifications)، وهو استثناء غير
+    // مُلتقَط بأي try/catch فيسقط التطبيق بالكامل. يحدث هذا تلقائياً لحظة
+    // تسجيل الدخول (ElevenApp.LaunchedEffect(user) يستدعي loadNotifications
+    // فوراً)، لأي مستخدم لديه أي إشعار طلب واحد على الأقل — ما يطابق تماماً:
+    // "ينهار فوراً عند تسجيل الدخول، ويعود الانهيار نفسه بعد مسح البيانات
+    // وإعادة تسجيل الدخول لنفس الحساب" (نفس المستندات الحقيقية تُعاد قراءتها).
+    /** مسار داخلي يُفتح عند الضغط على الإشعار، مثال: "/order/abc123" */
+    val actionRoute: String? = null,
+    /** رابط صورة اختيارية (إشعارات العروض غالباً) — مطابق لـshared/types.ts::AppNotification.imageUrl */
+    val imageUrl: String? = null,
+    val createdAt: Timestamp? = null,
+) {
+    /** اسم بديل لمحتوى الإشعار (نفس body) */
+    val message: String get() = body
+
+    /** نص نسبي لوقت الإشعار، مثل "منذ 5 دقائق" */
+    val timeAgo: String get() {
+        val created = createdAt?.toDate()?.time ?: return ""
+        val diffMs = System.currentTimeMillis() - created
+        val minutes = diffMs / 60_000
+        val hours = minutes / 60
+        val days = hours / 24
+        return when {
+            minutes < 1 -> "الآن"
+            minutes < 60 -> "منذ $minutes دقيقة"
+            hours < 24 -> "منذ $hours ساعة"
+            days < 30 -> "منذ $days يوم"
+            else -> "منذ ${days / 30} شهر"
+        }
+    }
+}
+
+// ─── Coupon ────────────────────────────────────────────────────
+// مطابق لمجموعة "coupons" بـ Firestore، وتُدار من لوحة تحكم الموقع فقط (لا تُكتب من التطبيق)
+@IgnoreExtraProperties
+data class Coupon(
+    val code: String = "",
+    val discountType: String = "percentage", // "percentage" | "fixed"
+    val discountValue: Double = 0.0,
+    val isActive: Boolean = true,
+    val minOrderAmount: Double = 0.0,
+    val usageLimit: Long = 0L, // 0 = غير محدود
+    val usageCount: Long = 0L,
+    val expiresAt: Timestamp? = null,
+)
+
+/** نتيجة التحقق من كوبون قبل إتمام الطلب — تُستخدم للعرض فقط، التحقق النهائي يتم عند إنشاء الطلب. */
+sealed class CouponResult {
+    data class Valid(val discountAmount: Double, val coupon: Coupon) : CouponResult()
+    data class Invalid(val message: String) : CouponResult()
+}
+

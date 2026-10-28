@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      ELEVEN STORE — Theme (LIGHT)
+      يُستخدم لشريط الحالة/شريط التنقّل والخلفية قبل رسم Compose.
+      الألوان الفعلية لواجهة التطبيق تُدار عبر ElevenStoreTheme في Theme.kt
+    -->
+    <style name="Theme.ElevenStore" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:textColorPrimary">@color/foreground</item>
+        <item name="android:colorAccent">@color/primary</item>
+    </style>
+
+    <!--
+      ✅ جديد: ثيم شاشة الإقلاع (Android 12+ Splash Screen API).
+      هذا هو أول شيء يظهر فعلياً لحظة الضغط على أيقونة التطبيق — قبل حتى
+      تهيئة النشاط/Compose — فيحلّ محل "الوماضة البيضاء الفارغة" التي كانت
+      تظهر خلال هذه اللحظة (تحديداً ما يعنيه طلب "تقليل الإحساس بالانتظار").
+      يُستخدم فقط على MainActivity (شاشة الإقلاع)، وتتم إعادة الثيم تلقائياً
+      لـTheme.ElevenStore بعد أول رسمة عبر postSplashScreenTheme أدناه؛
+      المنطق الفعلي لمتى تُخفى (وربط ذلك بشاشة الترحيب داخل Compose) موجود
+      بـMainActivity.kt (installSplashScreen + setKeepOnScreenCondition).
+    -->
+    <style name="Theme.ElevenStore.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_logo_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_logo_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.ElevenStore</item>
+    </style>
+</resources>

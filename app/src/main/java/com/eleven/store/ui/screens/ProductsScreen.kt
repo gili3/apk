@@ -1,0 +1,605 @@
+package com.eleven.store.ui.screens
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.eleven.store.data.model.Product
+import com.eleven.store.ui.components.ProductCard
+import com.eleven.store.ui.theme.Accent
+import com.eleven.store.ui.theme.Border
+import com.eleven.store.ui.theme.Destructive
+import com.eleven.store.ui.theme.MutedForeground
+import com.eleven.store.ui.theme.Neutral100
+import com.eleven.store.ui.viewmodel.MainViewModel
+
+// ═══════════════════════════════════════════════════════════════
+//  PRODUCTS SCREEN — نسخة طبق الأصل من صفحة Products.tsx بالموقع
+// ═══════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun ProductsScreen(
+    viewModel: MainViewModel,
+    initialCategory: String = "",
+    initialFilter: String = "",
+    initialSearch: String = "",
+    // ✅ جديد: علامة تجارية محدَّدة مسبقاً (من بطاقة علامة بشاشة
+    // CategoriesScreen) — يفتح مباشرة على منتجات هذه العلامة بدل الاكتفاء
+    // بوضع فلتر "برامز" العام ثم تركه للمستخدم يختار من المنسدل يدوياً.
+    initialBrand: String = "",
+    onProductClick: (String) -> Unit,
+    onBack: () -> Unit,
+    onGoHome: () -> Unit = onBack,
+) {
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val brands by viewModel.brands.collectAsStateWithLifecycle()
+    val products by viewModel.allProducts.collectAsStateWithLifecycle()
+    val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    // ✅ إصلاح: نميّز فشل التحميل الفعلي (شبكة/سيرفر) عن "لا توجد منتجات فعلاً"
+    val loadError by viewModel.error.collectAsStateWithLifecycle()
+
+    // ── حالة الفلاتر — مطابق للموقع ─────────────────────────────
+    // ✅ إصلاح: rememberSaveable(initialCategory/initialFilter) بدل remember
+    // العادي — لو انتقل المستخدم من فئة لأخرى بدون إعادة إنشاء الشاشة (نفس
+    // الوجهة بمعاملات مختلفة)، تتزامن الحالة تلقائياً مع المعامل الجديد
+    // بدل أن تبقى عالقة على القيمة الأولى.
+    var selectedCategory by rememberSaveable(initialCategory) {
+        mutableStateOf(if (initialCategory.isNotBlank()) initialCategory else "all")
+    }
+    var filterType by rememberSaveable(initialFilter, initialBrand) {
+        mutableStateOf(
+            if (initialBrand.isNotBlank()) "brands"
+            else if (initialFilter.isNotBlank()) initialFilter
+            else "all"
+        )
+    }
+    var selectedBrand by rememberSaveable(initialFilter, initialBrand) {
+        mutableStateOf(if (initialBrand.isNotBlank()) initialBrand else "all")
+    }
+    var searchQuery by rememberSaveable(initialSearch) { mutableStateOf(initialSearch) }
+
+    // ✅ دالة إعادة تحميل موحّدة — تُستخدم في LaunchedEffect وأيضاً بزر
+    // "إعادة المحاولة" عند فشل التحميل، بدل تكرار نفس المعاملات مرتين
+    val reloadProducts: () -> Unit = {
+        viewModel.loadProducts(
+            categoryId = selectedCategory.takeIf { it != "all" },
+            isFeatured = if (filterType == "featured") true else null,
+            isNew = if (filterType == "new") true else null,
+            isBestSeller = if (filterType == "bestSeller") true else null,
+            onSale = if (filterType == "onSale") true else null,
+            brandId = if (filterType == "brands" && selectedBrand != "all") selectedBrand else null,
+            searchQuery = searchQuery.trim().takeIf { it.isNotEmpty() },
+        )
+    }
+
+    // تحميل المنتجات عند تغيّر الفلاتر
+    LaunchedEffect(selectedCategory, filterType, selectedBrand, searchQuery) {
+        reloadProducts()
+    }
+
+    Scaffold(
+        topBar = {
+            Column(
+                modifier = Modifier.background(MaterialTheme.colorScheme.background)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ✅ إصلاح: زر رجوع صريح — كانت الشاشة تعتمد فقط على زر
+                // النظام أو التبويب السفلي، فمستخدم داخل من "عرض المزيد"
+                // لا يجد سهم رجوع متوقَّعاً أعلى الشاشة.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "رجوع",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    Text(
+                        "المنتجات",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                    )
+                }
+
+                // ── الفلاتر — مطابقة للموقع: sticky top-0 z-10 bg-background/95 ──
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
+                    shadowElevation = 0.dp,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        // صفين منسدلين جنباً إلى جنب
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            // ── منسدل الفئات — "كل الفئات" ──
+                            Box(modifier = Modifier.weight(1f)) {
+                                var catExpanded by remember { mutableStateOf(false) }
+                                val catLabel = if (selectedCategory == "all") "كل الفئات"
+                                else categories.find { it.id == selectedCategory }?.name ?: "كل الفئات"
+
+                                OutlinedButton(
+                                    onClick = { catExpanded = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(40.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Border
+                                    ),
+                                ) {
+                                    Text(
+                                        catLabel,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text("▾", fontSize = 11.sp, color = MutedForeground)
+                                }
+                                DropdownMenu(
+                                    expanded = catExpanded,
+                                    onDismissRequest = { catExpanded = false },
+                                    modifier = Modifier.background(
+                                        MaterialTheme.colorScheme.surface
+                                    ),
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "كل الفئات",
+                                                fontWeight = if (selectedCategory == "all")
+                                                    FontWeight.SemiBold
+                                                else
+                                                    FontWeight.Normal,
+                                            )
+                                        },
+                                        onClick = {
+                                            selectedCategory = "all"
+                                            catExpanded = false
+                                        },
+                                        modifier = if (selectedCategory == "all")
+                                            Modifier.background(Accent.copy(alpha = 0.1f))
+                                        else
+                                            Modifier,
+                                        trailingIcon = if (selectedCategory == "all") {
+                                            {
+                                                Text(
+                                                    "✓",
+                                                    color = Accent,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        } else null,
+                                    )
+                                    categories.forEach { cat ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    cat.name,
+                                                    fontWeight = if (selectedCategory == cat.id)
+                                                        FontWeight.SemiBold
+                                                    else
+                                                        FontWeight.Normal,
+                                                )
+                                            },
+                                            onClick = {
+                                                selectedCategory = cat.id
+                                                catExpanded = false
+                                            },
+                                            modifier = if (selectedCategory == cat.id)
+                                                Modifier.background(Accent.copy(alpha = 0.1f))
+                                            else
+                                                Modifier,
+                                            trailingIcon = if (selectedCategory == cat.id) {
+                                                {
+                                                    Text(
+                                                        "✓",
+                                                        color = Accent,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            } else null,
+                                        )
+                                    }
+                                }
+                            }
+
+                            // ── منسدل الفرز — "جميع المنتجات" ──
+                            Box(modifier = Modifier.weight(1f)) {
+                                var filterExpanded by remember { mutableStateOf(false) }
+                                val filterLabel = when (filterType) {
+                                    "new" -> "المنتجات الجديدة"
+                                    "bestSeller" -> "الأكثر مبيعاً"
+                                    "featured" -> "المنتجات المميزة"
+                                    "onSale" -> "العروض والخصومات"
+                                    "brands" -> "العلامات التجارية"
+                                    else -> "جميع المنتجات"
+                                }
+                                OutlinedButton(
+                                    onClick = { filterExpanded = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(40.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Border
+                                    ),
+                                ) {
+                                    Text(
+                                        filterLabel,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text("▾", fontSize = 11.sp, color = MutedForeground)
+                                }
+                                DropdownMenu(
+                                    expanded = filterExpanded,
+                                    onDismissRequest = { filterExpanded = false },
+                                    modifier = Modifier.background(
+                                        MaterialTheme.colorScheme.surface
+                                    ),
+                                ) {
+                                    listOf(
+                                        "all" to "جميع المنتجات",
+                                        "new" to "المنتجات الجديدة",
+                                        "bestSeller" to "الأكثر مبيعاً",
+                                        "featured" to "المنتجات المميزة",
+                                        "onSale" to "العروض والخصومات",
+                                        "brands" to "العلامات التجارية",
+                                    ).forEach { (value, label) ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    label,
+                                                    fontWeight = if (filterType == value)
+                                                        FontWeight.SemiBold
+                                                    else
+                                                        FontWeight.Normal,
+                                                )
+                                            },
+                                            onClick = {
+                                                filterType = value
+                                                if (value != "brands") selectedBrand = "all"
+                                                filterExpanded = false
+                                            },
+                                            modifier = if (filterType == value)
+                                                Modifier.background(Accent.copy(alpha = 0.1f))
+                                            else
+                                                Modifier,
+                                            trailingIcon = if (filterType == value) {
+                                                {
+                                                    Text(
+                                                        "✓",
+                                                        color = Accent,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            } else null,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── منسدل العلامات التجارية — يظهر شرطياً ──
+                        if (filterType == "brands") {
+                            var brandExpanded by remember { mutableStateOf(false) }
+                            val brandLabel = if (selectedBrand == "all") "اختر علامة تجارية"
+                            else brands.find { it.id == selectedBrand }?.name ?: "اختر علامة تجارية"
+
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { brandExpanded = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(40.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        Border
+                                    ),
+                                ) {
+                                    Text(
+                                        brandLabel,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text("▾", fontSize = 11.sp, color = MutedForeground)
+                                }
+                                DropdownMenu(
+                                    expanded = brandExpanded,
+                                    onDismissRequest = { brandExpanded = false },
+                                    modifier = Modifier.background(
+                                        MaterialTheme.colorScheme.surface
+                                    ),
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "جميع الماركات",
+                                                fontWeight = if (selectedBrand == "all")
+                                                    FontWeight.SemiBold
+                                                else
+                                                    FontWeight.Normal,
+                                            )
+                                        },
+                                        onClick = {
+                                            selectedBrand = "all"
+                                            brandExpanded = false
+                                        },
+                                        modifier = if (selectedBrand == "all")
+                                            Modifier.background(Accent.copy(alpha = 0.1f))
+                                        else
+                                            Modifier,
+                                        trailingIcon = if (selectedBrand == "all") {
+                                            {
+                                                Text(
+                                                    "✓",
+                                                    color = Accent,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        } else null,
+                                    )
+                                    brands.forEach { brand ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    brand.name,
+                                                    fontWeight = if (selectedBrand == brand.id)
+                                                        FontWeight.SemiBold
+                                                    else
+                                                        FontWeight.Normal,
+                                                )
+                                            },
+                                            onClick = {
+                                                selectedBrand = brand.id
+                                                brandExpanded = false
+                                            },
+                                            modifier = if (selectedBrand == brand.id)
+                                                Modifier.background(Accent.copy(alpha = 0.1f))
+                                            else
+                                                Modifier,
+                                            trailingIcon = if (selectedBrand == brand.id) {
+                                                {
+                                                    Text(
+                                                        "✓",
+                                                        color = Accent,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            } else null,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = Border, thickness = 1.dp)
+            }
+        },
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            when {
+                // ── حالة التحميل ──────────────────────────────────
+                isLoading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(vertical = 128.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            color = Accent,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier.size(48.dp),
+                        )
+                    }
+                }
+
+                // ── فشل تحميل فعلي (شبكة/سيرفر) — مختلف عن "لا توجد نتائج" ──
+                loadError != null -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.CloudOff,
+                            contentDescription = null,
+                            tint = MutedForeground,
+                            modifier = Modifier.size(56.dp),
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "تعذّر تحميل المنتجات",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            // ✅ إصلاح: كانت هذه الرسالة نصاً ثابتاً دائماً بصرف النظر
+                            // عن سبب الفشل الفعلي (loadError نفسها لم تكن تُعرَض
+                            // إطلاقاً) — الآن نعرض الرسالة الدقيقة القادمة من
+                            // FirestoreRepository/AlgoliaSearchService، والتي تفرّق
+                            // فعلياً بين "لا يوجد اتصال بالإنترنت" وأي فشل آخر، مع
+                            // إبقاء نفس النص السابق كبديل احتياطي فقط إن غابت الرسالة.
+                            loadError ?: "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+                            color = MutedForeground,
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = { reloadProducts() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                        ) {
+                            Text("إعادة المحاولة", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                // ── لا توجد منتجات ────────────────────────────────
+                products.isEmpty() -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text("🔍", fontSize = 60.sp)
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "لم نجد أي منتجات",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 24.sp,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "حاول تغيير الفلاتر أو العودة للصفحة الرئيسية",
+                            color = MutedForeground,
+                            fontSize = 18.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                        )
+                        Spacer(Modifier.height(20.dp))
+                        Button(
+                            onClick = onGoHome,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                        ) {
+                            Text(
+                                "العودة للرئيسية",
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+
+                // ── شبكة المنتجات — grid-cols-2 ──────────────────
+                else -> {
+                    // ✅ Pagination/Infinite Scroll: نراقب آخر عنصر ظاهر بالشبكة،
+                    // وعند الوصول قريباً من نهاية القائمة المحمَّلة نطلب الصفحة
+                    // التالية تلقائياً (بدل زر "تحميل المزيد" — أنسب لشبكة صور).
+                    val hasMoreProducts by viewModel.hasMoreProducts.collectAsStateWithLifecycle()
+                    val isLoadingMoreProducts by viewModel.isLoadingMoreProducts.collectAsStateWithLifecycle()
+                    val gridState = rememberLazyGridState()
+
+                    LaunchedEffect(gridState, products, hasMoreProducts) {
+                        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+                            .collect { lastVisibleIndex ->
+                                if (lastVisibleIndex != null &&
+                                    lastVisibleIndex >= products.size - 4 &&
+                                    hasMoreProducts && !isLoadingMoreProducts
+                                ) {
+                                    viewModel.loadMoreProducts()
+                                }
+                            }
+                    }
+
+                    LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Fixed(2),
+                        contentPadding = PaddingValues(
+                            start = 12.dp,
+                            end = 12.dp,
+                            top = 24.dp,
+                            bottom = 80.dp,
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(products, key = { it.id }) { product ->
+                            ProductCard(
+                                product = product,
+                                isFavorite = product.id in favoriteIds,
+                                onFavoriteToggle = { viewModel.toggleFavorite(product.id) },
+                                onClick = { onProductClick(product.id) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (isLoadingMoreProducts) {
+                            item(span = { GridItemSpan(2) }) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ملاحظة: بطاقة المنتج الآن مكوّن موحّد واحد (ProductCard في Components.kt)
+// يُستخدم هنا وبالصفحة الرئيسية معاً بنفس الشكل والحجم والمحتوى، بدل
+// نسخة منفصلة لكل شاشة كما كان سابقاً.
+// formatPrice/formatNumber مُعرّفتان بشكل مشترك في ScreenCommon.kt

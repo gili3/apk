@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Eleven Store</string>
+    <!-- ✅ إصلاح: معرّف قناة إشعارات ثابت — يُستخدم في AndroidManifest.xml (meta-data)
+         وفي ElevenStoreApp لإنشاء القناة عند إقلاع التطبيق، وفي ElevenFirebaseMessagingService
+         عند عرض الإشعار محلياً. يجب أن يتطابق الاسم بالثلاثة أماكن. -->
+    <string name="default_notification_channel_id" translatable="false">eleven_store_channel</string>
+</resources>

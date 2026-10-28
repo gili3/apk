@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ELEVEN STORE — نظام الألوان الموحّد (DARK) — Design Rules
+  يُطبَّق تلقائيًا عند تفعيل الوضع الداكن في نظام الجهاز.
+-->
+<resources>
+    <color name="background">#0F172A</color>
+    <color name="foreground">#F1F5F9</color>
+    <color name="card">#1E293B</color>
+    <color name="card_foreground">#F1F5F9</color>
+    <color name="secondary">#1E293B</color>
+    <color name="secondary_foreground">#F1F5F9</color>
+    <color name="muted">#1E293B</color>
+    <color name="muted_foreground">#94A3B8</color>
+    <color name="primary">#E2E8F0</color>
+    <color name="primary_foreground">#0F172A</color>
+    <color name="accent">#E2E8F0</color>
+    <color name="accent_foreground">#0F172A</color>
+    <color name="destructive">#F87171</color>
+    <color name="destructive_foreground">#0F172A</color>
+    <color name="success">#4ADE80</color>
+    <color name="warning">#FB923C</color>
+    <color name="info">#60A5FA</color>
+    <color name="border">#334155</color>
+    <color name="input">#1E293B</color>
+    <color name="ring">#94A3B8</color>
+</resources>
